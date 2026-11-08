@@ -191,16 +191,8 @@ async fn publish(a: &App, id: &str, path: &std::path::Path) -> Result<String> {
     let app = a.clone();
     let src = path.to_path_buf();
     let key_copy = key.clone();
-    let filename = format!("{id}.mp4");
     let upload = tokio::task::spawn_blocking(move || {
-        store::oss_copy(
-            &app,
-            &src,
-            &key_copy,
-            "video/mp4",
-            "public,max-age=31536000",
-            Some(&format!("attachment; filename={filename}")),
-        )
+        store::oss_copy_private(&app, &src, &key_copy, "video/mp4", "private,no-store")
     })
     .await
     .map_err(|_| fail("视频OSS上传任务中断"))?;

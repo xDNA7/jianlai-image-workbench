@@ -9,6 +9,9 @@ PASSWORD=secrets.token_hex(16)
 WORK=pathlib.Path(tempfile.mkdtemp(prefix='jianlai-pg-business-',dir='/tmp'))
 PROCESSES=[]
 LOGS=[]
+VIDEO_SESSIONS={}
+VIDEO_ACCOUNTS=set()
+VIDEO_BYTES=b"\x00\x00\x00\x20ftypisom"+b"\0"*20
 
 def psql(sql, database=DB):
     return subprocess.check_output(['runuser','-u','postgres','--','psql','-X','-qAt','-v','ON_ERROR_STOP=1','-d',database,'-c',sql],text=True,cwd='/tmp').strip()
@@ -60,11 +63,33 @@ class Provider(http.server.BaseHTTPRequestHandler):
             self.send_response(200); result={'choices':[{'message':{'content':json.dumps({'title':'测试模板','category':'poster','prompt':'A test poster','tags':[],'parameters':[],'parameterDefaults':{}})}}]}
         else:self.send_response(404);result={}
         self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(result).encode())
+    def private_video(self, head=False):
+        if self.path.startswith('/local-test/results/videos/'):
+            self.send_response(403);self.end_headers();return True
+        if not self.path.startswith('/private-video/mock.mp4?signature=mock'):return False
+        start,end=0,len(VIDEO_BYTES)-1
+        if self.headers.get('Range'):
+            matched=re.fullmatch(r'bytes=(\d+)-(\d*)',self.headers['Range'])
+            if not matched:self.send_response(416);self.end_headers();return True
+            start=int(matched[1]);end=int(matched[2]) if matched[2] else end
+            if start>=len(VIDEO_BYTES) or end<start:
+                self.send_response(416);self.send_header('Content-Range',f'bytes */{len(VIDEO_BYTES)}');self.end_headers();return True
+            end=min(end,len(VIDEO_BYTES)-1)
+        self.send_response(206 if self.headers.get('Range') else 200)
+        self.send_header('Content-Type','video/mp4');self.send_header('Accept-Ranges','bytes');self.send_header('Content-Length',str(end-start+1))
+        if self.headers.get('Range'):self.send_header('Content-Range',f'bytes {start}-{end}/{len(VIDEO_BYTES)}')
+        self.end_headers()
+        if not head:self.wfile.write(VIDEO_BYTES[start:end+1])
+        return True
     def do_HEAD(self):
+        if self.path.startswith('/private-video/'):
+            self.send_response(403);self.end_headers();return
+        if self.private_video(head=True):return
         if self.path.startswith('/local-test/'):
             self.send_response(200);self.send_header('Content-Type','image/png');self.send_header('Content-Length',str(len(PNG)));self.end_headers();return
         self.send_response(404);self.end_headers()
     def do_GET(self):
+        if self.private_video():return
         if self.path.startswith('/local-test/expired-'):
             self.send_response(410);self.end_headers();return
         if self.path.startswith('/local-test/'):
@@ -80,15 +105,23 @@ class Provider(http.server.BaseHTTPRequestHandler):
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args):return None
 OPENER=urllib.request.build_opener(NoRedirect)
-def req(port,path,body=None,cookie='',csrf=None,method=None):
+def req(port,path,body=None,cookie='',csrf=None,method=None,video_auth=True,extra_headers=None):
+    if video_auth and (port,cookie) in VIDEO_SESSIONS:cookie += '; '+VIDEO_SESSIONS[(port,cookie)]
     headers={'Origin':f'http://127.0.0.1:{port}','Cookie':cookie}
     if body is not None:headers['Content-Type']='application/json'
     if csrf:headers['X-CSRF-Token']=csrf
+    if extra_headers:headers.update(extra_headers)
     r=urllib.request.Request(f'http://127.0.0.1:{port}/jianlai'+path,data=None if body is None else json.dumps(body).encode(),headers=headers,method=method)
     try:res=OPENER.open(r,timeout=30)
     except urllib.error.HTTPError as e:res=e
     data=res.read()
     return res.status, json.loads(data) if data and res.headers.get('Content-Type','').startswith('application/json') else data, res.headers
+
+def video_login(port,cookie):
+    code,data,headers=req(port,'/api/video-access',{'password':'test-password'},cookie,video_auth=False)
+    assert code==200 and data['authenticated'],(code,data)
+    VIDEO_SESSIONS[(port,cookie)]=headers['Set-Cookie'].split(';')[0]
+    VIDEO_ACCOUNTS.add(cookie)
 
 def start(index,maintenance=False,mode="postgres"):
     data=WORK/f'data{index}';data.mkdir(exist_ok=True)
@@ -117,6 +150,8 @@ ADMIN_PATH=local_test_admin_path_123456
 ADMIN_USERNAME=test-admin
 ADMIN_PASSWORD_SALT={salt}
 ADMIN_PASSWORD_HASH={digest}
+VIDEO_ACCESS_PASSWORD_SALT={salt}
+VIDEO_ACCESS_PASSWORD_HASH={digest}
 CLEANUP_INTERVAL_MS=3600000
 ''')
     if mode=='sqlite':
@@ -128,7 +163,10 @@ CLEANUP_INTERVAL_MS=3600000
     p=subprocess.Popen([str(BINARY)],env=env,stdout=log,stderr=log);PROCESSES.append(p)
     for _ in range(100):
         try:
-            if req(port,'/api/health')[0]==200:return port,p
+            if req(port,'/api/health')[0]==200:
+                if not maintenance and mode=='postgres':
+                    for account_cookie in VIDEO_ACCOUNTS.copy():video_login(port,account_cookie)
+                return port,p
         except (OSError,urllib.error.URLError):pass
         if p.poll() is not None:raise AssertionError(f'server startup failed ({p.returncode})')
         time.sleep(.1)
@@ -150,14 +188,24 @@ try:
     assert BINARY.is_file(),BINARY
     psql(f'CREATE ROLE {ROLE} LOGIN PASSWORD \'{PASSWORD}\'',database='postgres')
     subprocess.check_call(['runuser','-u','postgres','--','createdb','-O',ROLE,DB],cwd='/tmp')
-    (WORK/'oss-mock').write_text('#!/bin/sh\nif [ -e "'+str(WORK/'slow-oss')+'" ]; then sleep 0.5; fi\nexit 0\n');(WORK/'oss-mock').chmod(0o700)
     PROVIDER=http.server.ThreadingHTTPServer(('127.0.0.1',0),Provider)
     threading.Thread(target=PROVIDER.serve_forever,daemon=True).start()
+    (WORK/'oss-mock').write_text('#!/usr/bin/env python3\nimport json,pathlib,sys,time\nw=pathlib.Path('+repr(str(WORK))+')\nif (w/"slow-oss").exists():time.sleep(.5)\nwith (w/"oss-commands.jsonl").open("a") as f:f.write(json.dumps(sys.argv[1:])+"\\n")\nif "presign" in sys.argv:print('+repr(f'http://127.0.0.1:{PROVIDER.server_port}/private-video/mock.mp4?signature=mock')+')\n');(WORK/'oss-mock').chmod(0o700)
     port,server=start(0);port2=port
     env={**os.environ,'JIANLAI_TEST_DATABASE_URL':f'postgresql://{ROLE}:{PASSWORD}@127.0.0.1/{DB}','CARGO_TARGET_DIR':os.environ.get('CARGO_TARGET_DIR','/tmp/jianlai-pg-target')}
     subprocess.check_call(['cargo','test','--locked','--quiet','--manifest-path',str(ROOT/'server-rust/Cargo.toml'),'postgres_statement_catalog','--','--ignored'],env=env)
     check('all repository statements prepare against real PostgreSQL')
     one,c1=bootstrap(port);two,c2=bootstrap(port2)
+    unchanged=psql('SELECT balance FROM shared_ledger')
+    assert req(port,'/api/videos',cookie=c1,video_auth=False)[0]==401
+    assert req(port,'/api/chat',{'mode':'video','messages':[{'role':'user','content':'test'}]},c1,video_auth=False)[0]==401
+    assert req(port,'/api/bootstrap',cookie=c1,video_auth=False)[1]['activeVideo'] is None
+    assert req(port,'/api/history',cookie=c1,video_auth=False)[0]==200
+    assert req(port,'/api/video-access',{'password':'test-password'},c1,video_auth=False,extra_headers={'Origin':'https://foreign.invalid'})[0]==403
+    video_login(port,c1);video_login(port,c2)
+    if port2!=port:video_login(port2,c1);video_login(port2,c2)
+    assert psql('SELECT balance FROM shared_ledger')==unchanged
+    check('video-only internal login gates direct API/chat/bootstrap without changing public image access or balance')
     assert not list(WORK.glob('data*/state.sqlite'))
     check('postgres starts without SQLite and bootstrap persists account')
     def chat_events(payload):
@@ -398,6 +446,26 @@ try:
     assert psql('SELECT balance FROM shared_ledger')=='49560'
     assert req(port,'/api/videos',cookie=c1)[1]['records'][0]['id']==v['id']
     assert not list(WORK.glob('data*/video-tmp/*.mp4'))
+    media='/api/videos/'+v['id']+'/media'
+    assert finished['url']=='api/videos/'+v['id']+'/media'
+    assert req(port,media,cookie=c1,video_auth=False)[0]==401
+    assert req(port,media,cookie=c2)[0]==404
+    code,media_body,headers=req(port,media,cookie=c1);assert code==200 and media_body==VIDEO_BYTES,(code,media_body)
+    assert headers['Cache-Control']=='private, no-store'
+    code,media_body,headers=req(port,media,cookie=c1,extra_headers={'Range':'bytes=4-9'})
+    assert code==206 and media_body==VIDEO_BYTES[4:10] and headers['Content-Range']==f'bytes 4-9/{len(VIDEO_BYTES)}'
+    code,media_body,headers=req(port,media,cookie=c1,method='HEAD');assert code==200 and media_body==b'' and int(headers['Content-Length'])==len(VIDEO_BYTES)
+    assert req(port,media,cookie=c1,extra_headers={'Range':'bytes=9999-'})[0]==416
+    commands=[json.loads(line) for line in (WORK/'oss-commands.jsonl').read_text().splitlines()]
+    uploads=[cmd for cmd in commands if 'cp' in cmd and any('results/videos/'+v['id']+'.mp4' in item for item in cmd)]
+    assert uploads and all(cmd[cmd.index('--acl')+1]=='private' and cmd[cmd.index('--cache-control')+1]=='private,no-store' for cmd in uploads),uploads
+    try:OPENER.open(f'http://127.0.0.1:{PROVIDER.server_port}/local-test/results/videos/'+v['id']+'.mp4');raise AssertionError('private video became public')
+    except urllib.error.HTTPError as error:assert error.code==403
+    assert all(cmd[cmd.index('--expires-duration')+1]=='5m' for cmd in commands if 'presign' in cmd and any('results/videos/' in item for item in cmd))
+    assert req(port,'/api/video-access',cookie=c1,method='DELETE')[0]==200
+    assert req(port,media,cookie=c1)[0]==401
+    video_login(port,c1)
+    check('private video object ACL and authenticated media GET/HEAD/Range/account isolation/logout')
     check('video provider/mock OSS full success, idempotency, isolation and exact billing')
     psql('UPDATE shared_ledger SET balance=50070')
 

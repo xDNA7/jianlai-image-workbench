@@ -20,6 +20,7 @@ import type { ThreadActions } from './Thread'
 import type { Template } from './types'
 import type { Mark } from './marks'
 import { useWorkbench } from './useWorkbench'
+import { VideoAccessGate } from './VideoAccessGate'
 import './chat.css'
 
 const VideoPane = lazy(() => import('./VideoPane'))
@@ -50,7 +51,10 @@ export function ChatApp() {
   const [filter, setFilter] = useState<GalleryFilter>('all')
   const [lightbox, setLightbox] = useState<LightboxImage | null>(null)
   const [videoSelection, setVideoSelection] = useState<{ accountId: string | null; video: GalleryVideo } | null>(null)
-  const videoLightbox = videoSelection?.accountId === (w.boot?.accountId ?? null) ? videoSelection.video : null
+  useEffect(() => {
+    if (!w.videoAccess.authenticated) setVideoSelection(null)
+  }, [w.videoAccess.authenticated])
+  const videoLightbox = w.videoAccess.authenticated && videoSelection?.accountId === (w.boot?.accountId ?? null) ? videoSelection.video : null
   const [composerEpoch, setComposerEpoch] = useState(0)
   const [draft, setDraft] = useState<{ text: string; nonce: number }>()
   const [annotating, setAnnotating] = useState<AnnotateTarget | null>(null)
@@ -185,7 +189,7 @@ export function ChatApp() {
           ) : view === 'templates' ? (
             <div className="jl-pane-scroll"><TemplatesPane templates={w.templates} mine={w.mine} onRemoveMine={w.removeMine} state={w.templatesState} onRetry={w.ensureTemplates} onPick={pickTemplate} /></div>
           ) : (
-            <div className="jl-pane-scroll"><Suspense fallback={<p className="p-6 text-sm text-muted-foreground">加载中…</p>}><VideoPane key={w.boot?.accountId || 'pending'} accountId={w.boot?.accountId || null} balance={w.balance} onBalance={w.refreshBalance} /></Suspense></div>
+            <div className="jl-pane-scroll"><VideoAccessGate access={w.videoAccess}><Suspense fallback={<p className="p-6 text-sm text-muted-foreground">加载中…</p>}><VideoPane key={w.boot?.accountId || 'pending'} accountId={w.boot?.accountId || null} balance={w.balance} onBalance={w.refreshBalance} /></Suspense></VideoAccessGate></div>
           )}
         </main>
       </div>

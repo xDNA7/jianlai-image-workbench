@@ -1,0 +1,14 @@
+Jianlai video storyboard adaptation
+
+This application includes video storyboard editing code adapted from Nomi:
+https://github.com/aqm857886159/Nomi
+Upstream commit: 0fdd0da72e9be98430b300e491b6bd47f7d79976
+Upstream license: GNU Affero General Public License, version 3 only.
+
+The adapted module is ui/src/chat/nomi/storyboard-edits.ts. Changes remove
+Nomi's desktop/workbench state, scene identity migration and plan renumbering,
+and integrate scalar storyboard rows with the existing single-video workflow.
+The application source and modifications are provided under AGPL-3.0-only.
+Corresponding source: https://github.com/xDNA7/jianlai-image-workbench
+See LICENSE and the module README for provenance. Third-party dependencies
+retain their respective licenses and notices.

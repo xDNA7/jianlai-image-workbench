@@ -188,6 +188,6 @@ pub fn video_job(db: &impl repositories::database::Query, job: &str) -> Result<V
         0
     };
     Ok(
-        json!({"id":job,"status":status,"phase":phase,"created":created,"prompt":prompt,"duration":duration,"ratio":ratio,"resolution":resolution,"url":url,"error":error.unwrap_or_default(),"reservedCents":reserved,"chargedCents":charged,"providerId":provider,"progress":progress,"estimatedSeconds":duration*60,"elapsedSeconds":started.map(|s|(now()-s).max(0)/1000).unwrap_or(0),"availableCents":store::money(db)?["availableCents"],"account":account}),
+        json!({"id":job,"status":status,"phase":phase,"created":created,"prompt":prompt,"duration":duration,"ratio":ratio,"resolution":resolution,"url":url.map(|_| format!("api/videos/{job}/media")),"error":error.unwrap_or_default(),"reservedCents":reserved,"chargedCents":charged,"providerId":provider,"progress":progress,"estimatedSeconds":duration*60,"elapsedSeconds":started.map(|s|(now()-s).max(0)/1000).unwrap_or(0),"availableCents":store::money(db)?["availableCents"],"account":account}),
     )
 }

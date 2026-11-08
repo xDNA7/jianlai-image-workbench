@@ -77,6 +77,7 @@ async function install(page: Page): Promise<Mock> {
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
+    if (path.endsWith('/video-access')) return json(route, { authenticated: true })
     if (path.endsWith('/bootstrap')) {
       return json(route, {
         accountId: 'acct-1', availableCents: 5000, imagePriceCents: 30, activeJob: null, activeVideo: null,

@@ -11,7 +11,8 @@ async function install(page: Page, restore: boolean, dropFirst = false) {
   await page.route('**/api/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname
     let body: unknown
-    if (path.endsWith('/bootstrap')) body = { accountId: account, availableCents: quota, activeVideo: restore ? last : null, activeJob: null, capabilities: {} }
+    if (path.endsWith('/video-access')) body = { authenticated: true }
+    else if (path.endsWith('/bootstrap')) body = { accountId: account, availableCents: quota, activeVideo: restore ? last : null, activeJob: null, capabilities: {} }
     else if (path.endsWith('/history') || path.endsWith('/templates')) body = { records: [], templates: [] }
     else if (path.endsWith('/chat') && request.method() === 'POST') {
       const chat = request.postDataJSON(); chats.push(chat)
@@ -181,4 +182,56 @@ test('video first frame and followup edits survive the storyboard confirmation b
   await confirm(page)
   await expect.poll(() => mock.submissions.length).toBe(1)
   expect(String(mock.submissions[0].image)).toMatch(/^data:image\/png;base64,/)
+})
+
+
+test('shot editing keeps one paid video and its total duration while preserving order', async ({ page }, info) => {
+  const mock = await install(page, false)
+  await page.goto('/?view=video', { waitUntil: 'networkidle' })
+  await compose(page)
+  const shots = page.getByRole('list', { name: '视频分镜镜头' })
+  await expect(shots.getByRole('listitem')).toHaveCount(2)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  const editor = await page.locator('.jl-video-editor').boundingBox()
+  const dialogue = await page.locator('.jl-video-dialogue').boundingBox()
+  expect(editor && dialogue).toBeTruthy()
+  if (info.project.name === 'desktop') expect(editor!.x + editor!.width).toBeLessThanOrEqual(dialogue!.x + 1)
+  else expect(dialogue!.y + dialogue!.height).toBeLessThanOrEqual(editor!.y + 1)
+  await page.screenshot({ path: info.outputPath('nomi-video-workspace.png'), fullPage: true, animations: 'disabled' })
+  await expect(page.getByRole('button', { name: '镜头1上移', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '镜头2下移', exact: true })).toBeDisabled()
+  await page.getByRole('button', { name: '镜头1下移', exact: true }).click()
+  await expect(page.getByLabel('镜头1画面', { exact: true })).toHaveValue(defaultPlan.shots[1].scene)
+  await expect(page.getByLabel('镜头2画面', { exact: true })).toHaveValue(defaultPlan.shots[0].scene)
+  await page.getByRole('button', { name: '镜头1复制', exact: true }).click()
+  await expect(shots.getByRole('listitem')).toHaveCount(3)
+  await expect(page.getByLabel('视频总时长')).toHaveValue('10')
+  await page.getByLabel('镜头2画面', { exact: true }).fill('复制镜头的独立编辑')
+  await expect(page.getByLabel('镜头1画面', { exact: true })).toHaveValue(defaultPlan.shots[1].scene)
+  await page.getByRole('button', { name: '镜头3删除', exact: true }).click()
+  await expect(shots.getByRole('listitem')).toHaveCount(2)
+  await expect(page.getByLabel('视频总时长')).toHaveValue('10')
+  await expect(page.getByText('预计 ¥12.00 · ¥1.20 / 秒', { exact: true })).toBeVisible()
+  expect(mock.submissions).toHaveLength(0)
+  await confirm(page)
+  await expect.poll(() => mock.submissions.length).toBe(1)
+  expect(mock.submissions[0].duration).toBe(10)
+  expect(String(mock.submissions[0].prompt)).toContain(defaultPlan.shots[1].scene)
+  expect(String(mock.submissions[0].prompt)).toContain('复制镜头的独立编辑')
+  expect(String(mock.submissions[0].prompt)).not.toContain(defaultPlan.shots[0].scene)
+})
+
+test('shot editing respects the six-shot limit and always retains at least one shot', async ({ page }) => {
+  await install(page, false)
+  await page.goto('/?view=video', { waitUntil: 'networkidle' })
+  await compose(page)
+  const shots = page.getByRole('list', { name: '视频分镜镜头' })
+  for (let count = 2; count < 6; count += 1) await page.getByRole('button', { name: '镜头1复制', exact: true }).click()
+  await expect(shots.getByRole('listitem')).toHaveCount(6)
+  for (let index = 1; index <= 6; index += 1) await expect(page.getByRole('button', { name: `镜头${index}复制`, exact: true })).toBeDisabled()
+  await expect(page.getByLabel('视频总时长')).toHaveValue('10')
+  for (let count = 6; count > 1; count -= 1) await page.getByRole('button', { name: '镜头1删除', exact: true }).click()
+  await expect(shots.getByRole('listitem')).toHaveCount(1)
+  await expect(page.getByRole('button', { name: '镜头1删除', exact: true })).toBeDisabled()
+  await expect(page.getByLabel('视频总时长')).toHaveValue('10')
 })

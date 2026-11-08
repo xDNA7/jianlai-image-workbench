@@ -132,6 +132,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/video-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Inspect independent internal-video access for the current ordinary account. An automatic ordinary account alone is not internal access. Video sessions are account-bound, last eight hours and are lost on server restart or credential rotation. Responses are not cacheable. */
+        get: operations["getVideoAccess"];
+        put?: never;
+        /** @description Verify the shared internal-video password without granting administrator privileges. Requires the current ordinary account and an explicit same-origin Origin header. Sets an opaque HttpOnly, Secure, SameSite=Strict cookie at Path=/ for eight hours. Five failed attempts per peer address within fifteen minutes are rate-limited. Neither the submitted password nor a session token is returned in JSON. */
+        post: operations["signInVideoAccess"];
+        /** @description Revoke the current internal-video session and expire its cookie. Requires the ordinary account and an explicit same-origin Origin header; it is idempotent when there is no current internal-video session. Does not revoke the ordinary account or affect public image creation. */
+        delete: operations["signOutVideoAccess"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/videos": {
         parameters: {
             query?: never;
@@ -139,8 +158,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @description Requires the ordinary account and independent internal-video session; jobs remain isolated to their owning account. */
         get: operations["listVideos"];
         put?: never;
+        /** @description Requires the ordinary account and independent internal-video session; jobs remain isolated to their owning account. A same-origin Origin header is mandatory before task creation and billing. */
         post: operations["createVideoJob"];
         delete?: never;
         options?: never;
@@ -155,6 +176,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @description Requires the ordinary account and independent internal-video session; jobs remain isolated to their owning account. */
         get: operations["getVideoByRequest"];
         put?: never;
         post?: never;
@@ -171,12 +193,38 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @description Requires the ordinary account and independent internal-video session; jobs remain isolated to their owning account. */
         get: operations["getVideoJob"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/videos/{jobId}/media": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional byte range forwarded to private object storage */
+                Range?: string;
+                /** @description Optional conditional range validator forwarded to object storage */
+                "If-Range"?: string;
+            };
+            path: {
+                jobId: components["parameters"]["JobId"];
+            };
+            cookie?: never;
+        };
+        /** @description Internal-session and ordinary-account ownership checked on every request. Proxies private stored video bytes without exposing object-storage or signed URLs. Successful responses use video/mp4, Cache-Control: private, no-store and Content-Disposition: inline. HEAD has no body. */
+        get: operations["getVideoMedia"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** @description Same internal access and account ownership checks as GET. Returns video headers with no response body; never exposes a storage or signed URL. */
+        head: operations["headVideoMedia"];
         patch?: never;
         trace?: never;
     };
@@ -280,6 +328,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        VideoAccess: {
+            authenticated: boolean;
+            /** @description Session expiry as Unix milliseconds; null when not authenticated */
+            expiresAt: number | null;
+            /** @description Whether the server has valid internal-video credential configuration */
+            enabled: boolean;
+        };
+        VideoAccessLogin: {
+            /**
+             * Format: password
+             * @description Shared internal-video password, at most 2048 UTF-8 bytes
+             */
+            password: string;
+        };
         Bootstrap: {
             accountId: string;
             availableCents: number | null;
@@ -296,6 +358,7 @@ export interface components {
             videoMinSeconds?: number;
             videoMaxSeconds?: number;
             activeJob?: components["schemas"]["ActiveImageJob"] | null;
+            /** @description Null unless the current account has a valid independent internal-video session */
             activeVideo?: components["schemas"]["VideoJob"] | null;
         };
         GenerateRequest: {
@@ -373,6 +436,7 @@ export interface components {
             duration?: number;
             ratio?: string;
             resolution?: string;
+            /** @description Account-owned internal media proxy path (api/videos/{jobId}/media), never a storage or signed URL */
             url?: string | null;
             error?: string;
             reservedCents?: number;
@@ -436,6 +500,7 @@ export interface components {
         };
         ChatRequest: {
             /**
+             * @description Video mode requires independent internal-video access; image mode remains public to ordinary accounts.
              * @default image
              * @enum {string}
              */
@@ -672,13 +737,22 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Server-sent events meta/delta/done/error. Default image mode emits a validated plan event. Video mode emits a validated storyboard event (VideoStoryboard schema), never a generation task. The user must explicitly confirm before a separate POST /api/videos. Missing running time defaults to 10 seconds; requests above 15 seconds are optimized to 15 seconds with a server-generated notice. Existing chat quota and concurrency limits apply to both modes. */
+            /** @description Server-sent events meta/delta/done/error. Default image mode emits a validated plan event. Video mode emits a validated storyboard event (VideoStoryboard schema), never a generation task. The user must explicitly confirm before a separate POST /api/videos. Missing running time defaults to 10 seconds; requests above 15 seconds are optimized to 15 seconds with a server-generated notice. Existing chat quota and concurrency limits apply to both modes. Video mode additionally requires the independent internal-video session and an explicit same-origin Origin header; a missing or expired session returns 401 before the stream starts. Public image mode does not require video access. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "text/event-stream": unknown;
+                };
+            };
+            /** @description Ordinary account is missing or video mode lacks a valid internal-video session; no stream is started */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
@@ -883,6 +957,135 @@ export interface operations {
             };
         };
     };
+    getVideoAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Internal-video access state; expiresAt is null when not authenticated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoAccess"];
+                };
+            };
+            /** @description Ordinary account session is missing or invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    signInVideoAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VideoAccessLogin"];
+            };
+        };
+        responses: {
+            /** @description Internal-video access granted; sets the video session cookie */
+            200: {
+                headers: {
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoAccess"];
+                };
+            };
+            /** @description Ordinary account is missing or the internal password is incorrect */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Origin is absent or not same-origin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many login attempts */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Internal access is unconfigured or the session capacity is exhausted */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    signOutVideoAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Video access revoked; authenticated is false and expiresAt is null */
+            200: {
+                headers: {
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoAccess"];
+                };
+            };
+            /** @description Ordinary account session is missing or invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Origin is absent or not same-origin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     listVideos: {
         parameters: {
             query?: never;
@@ -899,6 +1102,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Videos"];
+                };
+            };
+            /** @description Ordinary account or internal-video session is missing, invalid or expired */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
@@ -925,13 +1137,31 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Created or reused video job */
+            /** @description Reused idempotent video job */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["VideoJob"];
+                };
+            };
+            /** @description New video task accepted and reserved for generation */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoJob"];
+                };
+            };
+            /** @description Ordinary account or internal-video session is missing, invalid or expired */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
@@ -965,6 +1195,15 @@ export interface operations {
                     "application/json": components["schemas"]["VideoJob"];
                 };
             };
+            /** @description Ordinary account or internal-video session is missing, invalid or expired */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description No task with this key belongs to the current account */
             404: {
                 headers: {
@@ -996,8 +1235,195 @@ export interface operations {
                     "application/json": components["schemas"]["VideoJob"];
                 };
             };
+            /** @description Ordinary account or internal-video session is missing, invalid or expired */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
             default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getVideoMedia: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional byte range forwarded to private object storage */
+                Range?: string;
+                /** @description Optional conditional range validator forwarded to object storage */
+                "If-Range"?: string;
+            };
+            path: {
+                jobId: components["parameters"]["JobId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Complete video bytes */
+            200: {
+                headers: {
+                    "Cache-Control"?: "private, no-store";
+                    "Content-Length"?: number;
+                    "Content-Range"?: string;
+                    "Accept-Ranges"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "video/mp4": string;
+                };
+            };
+            /** @description Requested byte range; HEAD returns headers only */
+            206: {
+                headers: {
+                    "Cache-Control"?: "private, no-store";
+                    "Content-Length"?: number;
+                    "Content-Range"?: string;
+                    "Accept-Ranges"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "video/mp4": string;
+                };
+            };
+            /** @description Ordinary account or internal-video session is missing, invalid or expired */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Completed video does not belong to the current account or has no stored file */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Stored video address cannot be safely mapped to its private object */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Object storage rejected the requested byte range; no JSON error shape is promised */
+            416: {
+                headers: {
+                    "Cache-Control"?: "private, no-store";
+                    "Content-Length"?: number;
+                    "Content-Range"?: string;
+                    "Accept-Ranges"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Private video storage is unavailable */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    headVideoMedia: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional byte range forwarded to private object storage */
+                Range?: string;
+                /** @description Optional conditional range validator forwarded to object storage */
+                "If-Range"?: string;
+            };
+            path: {
+                jobId: components["parameters"]["JobId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Complete video headers; Cache-Control is private, no-store */
+            200: {
+                headers: {
+                    "Cache-Control"?: "private, no-store";
+                    "Content-Length"?: number;
+                    "Content-Range"?: string;
+                    "Accept-Ranges"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested byte range; HEAD returns headers only */
+            206: {
+                headers: {
+                    "Cache-Control"?: "private, no-store";
+                    "Content-Length"?: number;
+                    "Content-Range"?: string;
+                    "Accept-Ranges"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Ordinary account or internal-video session is missing, invalid or expired */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Completed video does not belong to the current account or has no stored file */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Stored video address cannot be safely mapped to its private object */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Object storage rejected the requested byte range; no JSON error shape is promised */
+            416: {
+                headers: {
+                    "Cache-Control"?: "private, no-store";
+                    "Content-Length"?: number;
+                    "Content-Range"?: string;
+                    "Accept-Ranges"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Private video storage is unavailable */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

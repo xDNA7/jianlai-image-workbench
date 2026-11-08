@@ -75,9 +75,18 @@ paths:
             explicitly confirm before a separate POST /api/videos. Missing running
             time defaults to 10 seconds; requests above 15 seconds are optimized
             to 15 seconds with a server-generated notice. Existing chat quota and
-            concurrency limits apply to both modes.
+            concurrency limits apply to both modes. Video mode additionally requires
+            the independent internal-video session and an explicit same-origin
+            Origin header; a missing or expired session returns 401 before the
+            stream starts. Public image mode does not require video access.
           content:
             text/event-stream: {}
+        '401':
+          description: Ordinary account is missing or video mode lacks a valid internal-video session; no stream is started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         default:
           description: Existing JSON error response; status varies by authentication, validation, quota
             and provider failures
@@ -222,9 +231,120 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/video-access:
+    get:
+      operationId: getVideoAccess
+      description: >-
+        Inspect independent internal-video access for the current ordinary
+        account. An automatic ordinary account alone is not internal access.
+        Video sessions are account-bound, last eight hours and are lost on
+        server restart or credential rotation. Responses are not cacheable.
+      security:
+      - AccountSession: []
+      responses:
+        '200':
+          description: Internal-video access state; expiresAt is null when not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VideoAccess'
+        '401':
+          description: Ordinary account session is missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: signInVideoAccess
+      description: >-
+        Verify the shared internal-video password without granting administrator
+        privileges. Requires the current ordinary account and an explicit
+        same-origin Origin header. Sets an opaque HttpOnly, Secure,
+        SameSite=Strict cookie at Path=/ for eight hours. Five failed attempts
+        per peer address within fifteen minutes are rate-limited. Neither the
+        submitted password nor a session token is returned in JSON.
+      security:
+      - AccountSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VideoAccessLogin'
+      responses:
+        '200':
+          description: Internal-video access granted; sets the video session cookie
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VideoAccess'
+        '401':
+          description: Ordinary account is missing or the internal password is incorrect
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Origin is absent or not same-origin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Too many login attempts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Internal access is unconfigured or the session capacity is exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      operationId: signOutVideoAccess
+      description: >-
+        Revoke the current internal-video session and expire its cookie. Requires
+        the ordinary account and an explicit same-origin Origin header; it is
+        idempotent when there is no current internal-video session. Does not
+        revoke the ordinary account or affect public image creation.
+      security:
+      - AccountSession: []
+      responses:
+        '200':
+          description: Video access revoked; authenticated is false and expiresAt is null
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VideoAccess'
+        '401':
+          description: Ordinary account session is missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Origin is absent or not same-origin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/videos:
     get:
       operationId: listVideos
+      description: Requires the ordinary account and independent internal-video session; jobs remain isolated to their owning account.
+      security:
+      - AccountSession: []
+        VideoSession: []
       responses:
         '200':
           description: Video jobs
@@ -232,6 +352,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Videos'
+        '401':
+          description: Ordinary account or internal-video session is missing, invalid or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         default:
           description: Existing JSON error response; status varies by authentication, validation, quota
             and provider failures
@@ -241,6 +367,10 @@ paths:
                 $ref: '#/components/schemas/Error'
     post:
       operationId: createVideoJob
+      description: Requires the ordinary account and independent internal-video session; jobs remain isolated to their owning account. A same-origin Origin header is mandatory before task creation and billing.
+      security:
+      - AccountSession: []
+        VideoSession: []
       requestBody:
         required: true
         content:
@@ -249,11 +379,23 @@ paths:
               $ref: '#/components/schemas/VideoRequest'
       responses:
         '200':
-          description: Created or reused video job
+          description: Reused idempotent video job
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/VideoJob'
+        '202':
+          description: New video task accepted and reserved for generation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VideoJob'
+        '401':
+          description: Ordinary account or internal-video session is missing, invalid or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         default:
           description: Existing JSON error response; status varies by authentication, validation, quota
             and provider failures
@@ -264,6 +406,10 @@ paths:
   /api/videos/by-request:
     get:
       operationId: getVideoByRequest
+      description: Requires the ordinary account and independent internal-video session; jobs remain isolated to their owning account.
+      security:
+      - AccountSession: []
+        VideoSession: []
       parameters:
       - name: requestKey
         in: query
@@ -278,6 +424,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/VideoJob'
+        '401':
+          description: Ordinary account or internal-video session is missing, invalid or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           description: No task with this key belongs to the current account
           content:
@@ -287,6 +439,10 @@ paths:
   /api/videos/{jobId}:
     get:
       operationId: getVideoJob
+      description: Requires the ordinary account and independent internal-video session; jobs remain isolated to their owning account.
+      security:
+      - AccountSession: []
+        VideoSession: []
       parameters:
       - $ref: '#/components/parameters/JobId'
       responses:
@@ -296,6 +452,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/VideoJob'
+        '401':
+          description: Ordinary account or internal-video session is missing, invalid or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         default:
           description: Existing JSON error response; status varies by authentication, validation, quota
             and provider failures
@@ -303,6 +465,128 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/videos/{jobId}/media:
+    parameters:
+    - $ref: '#/components/parameters/JobId'
+    - name: Range
+      in: header
+      description: Optional byte range forwarded to private object storage
+      schema:
+        type: string
+    - name: If-Range
+      in: header
+      description: Optional conditional range validator forwarded to object storage
+      schema:
+        type: string
+    get:
+      operationId: getVideoMedia
+      description: >-
+        Internal-session and ordinary-account ownership checked on every request.
+        Proxies private stored video bytes without exposing object-storage or
+        signed URLs. Successful responses use video/mp4, Cache-Control:
+        private, no-store and Content-Disposition: inline. HEAD has no body.
+      security:
+      - AccountSession: []
+        VideoSession: []
+      responses:
+        '200':
+          description: Complete video bytes
+          headers: &videoMediaHeaders
+            Cache-Control:
+              schema:
+                type: string
+                const: private, no-store
+            Content-Length:
+              schema:
+                type: integer
+            Content-Range:
+              schema:
+                type: string
+            Accept-Ranges:
+              schema:
+                type: string
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: Requested byte range; HEAD returns headers only
+          headers: *videoMediaHeaders
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        '401':
+          description: Ordinary account or internal-video session is missing, invalid or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Completed video does not belong to the current account or has no stored file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: Stored video address cannot be safely mapped to its private object
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: Private video storage is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '416':
+          description: Object storage rejected the requested byte range; no JSON error shape is promised
+          headers: *videoMediaHeaders
+    head:
+      operationId: headVideoMedia
+      description: >-
+        Same internal access and account ownership checks as GET. Returns video
+        headers with no response body; never exposes a storage or signed URL.
+      security:
+      - AccountSession: []
+        VideoSession: []
+      responses:
+        '200':
+          description: Complete video headers; Cache-Control is private, no-store
+          headers: *videoMediaHeaders
+        '206':
+          description: Requested byte range; HEAD returns headers only
+          headers: *videoMediaHeaders
+        '401':
+          description: Ordinary account or internal-video session is missing, invalid or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Completed video does not belong to the current account or has no stored file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: Stored video address cannot be safely mapped to its private object
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: Private video storage is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '416':
+          description: Object storage rejected the requested byte range; no JSON error shape is promised
+          headers: *videoMediaHeaders
   /api/jobs/by-request:
     get:
       operationId: findImageJob
@@ -440,6 +724,17 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 components:
+  securitySchemes:
+    AccountSession:
+      type: apiKey
+      in: cookie
+      name: jianlai_session
+      description: Ordinary account cookie established by bootstrap; not internal authorization
+    VideoSession:
+      type: apiKey
+      in: cookie
+      name: jianlai_video_session
+      description: Opaque account-bound internal-video cookie, established by signInVideoAccess
   parameters:
     JobId:
       name: jobId
@@ -459,6 +754,33 @@ components:
       description: Deployment-specific management route identifier; no concrete value belongs in this
         document.
   schemas:
+    VideoAccess:
+      type: object
+      required:
+      - authenticated
+      - expiresAt
+      - enabled
+      properties:
+        authenticated:
+          type: boolean
+        expiresAt:
+          type: [integer, 'null']
+          description: Session expiry as Unix milliseconds; null when not authenticated
+        enabled:
+          type: boolean
+          description: Whether the server has valid internal-video credential configuration
+    VideoAccessLogin:
+      type: object
+      required:
+      - password
+      properties:
+        password:
+          type: string
+          format: password
+          writeOnly: true
+          minLength: 1
+          maxLength: 2048
+          description: Shared internal-video password, at most 2048 UTF-8 bytes
     Bootstrap:
       type: object
       required:
@@ -495,6 +817,7 @@ components:
           - $ref: '#/components/schemas/ActiveImageJob'
           - type: 'null'
         activeVideo:
+          description: Null unless the current account has a valid independent internal-video session
           anyOf:
           - $ref: '#/components/schemas/VideoJob'
           - type: 'null'
@@ -659,7 +982,9 @@ components:
         duration: *id005
         ratio: *id002
         resolution: *id002
-        url: *id008
+        url:
+          type: [string, 'null']
+          description: Account-owned internal media proxy path (api/videos/{jobId}/media), never a storage or signed URL
         error: *id002
         reservedCents: *id003
         chargedCents: *id003
@@ -773,6 +1098,7 @@ components:
           type: string
           enum: [image, video]
           default: image
+          description: Video mode requires independent internal-video access; image mode remains public to ordinary accounts.
         video:
           type: object
           description: Current editable storyboard settings; explicit duration in the latest user message overrides these defaults.

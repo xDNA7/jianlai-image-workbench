@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "profile": "fullstack",
+  "createdAt": "2026-11-08T16:48:01.025Z",
+  "stages": [
+    {
+      "id": "proposal",
+      "applicable": true,
+      "skipReason": null,
+      "status": "complete",
+      "evidence": {
+        "path": "docs/features/nomi-video-workbench.md",
+        "sha256": "25dd72d409215fd5c7cddcb0613b336f57f086e52011da889d12b43d4df0ff83"
+      },
+      "approval": {
+        "reference": "2026-11-09 用户：可以；批准所示样板、视频专用共享口令、测试后直接部署",
+        "at": "2026-11-08T16:54:11.620Z",
+        "sha256": "25dd72d409215fd5c7cddcb0613b336f57f086e52011da889d12b43d4df0ff83"
+      },
+      "completedAt": "2026-11-08T16:54:11.620Z"
+    },
+    {
+      "id": "prototype",
+      "applicable": true,
+      "skipReason": null,
+      "status": "complete",
+      "evidence": {
+        "path": "design/nomi-video/prototype.html",
+        "sha256": "e802a5baff39258d71b100d6916595a9e6f4806091bfc3042d4abf2e8e6306e1"
+      },
+      "approval": {
+        "reference": "2026-11-09 用户：可以；批准可操作分镜样板",
+        "at": "2026-11-08T16:54:12.223Z",
+        "sha256": "e802a5baff39258d71b100d6916595a9e6f4806091bfc3042d4abf2e8e6306e1"
+      },
+      "completedAt": "2026-11-08T16:54:12.223Z"
+    },
+    {
+      "id": "ui",
+      "applicable": true,
+      "skipReason": null,
+      "status": "complete",
+      "evidence": {
+        "path": "design/nomi-video/prototype.html",
+        "sha256": "e802a5baff39258d71b100d6916595a9e6f4806091bfc3042d4abf2e8e6306e1"
+      },
+      "approval": {
+        "reference": "2026-11-09 用户：可以；批准所示桌面与手机布局",
+        "at": "2026-11-08T16:54:12.452Z",
+        "sha256": "e802a5baff39258d71b100d6916595a9e6f4806091bfc3042d4abf2e8e6306e1"
+      },
+      "completedAt": "2026-11-08T16:54:12.452Z"
+    },
+    {
+      "id": "frontend",
+      "applicable": true,
+      "skipReason": null,
+      "status": "pending",
+      "evidence": null,
+      "approval": null,
+      "invalidation": {
+        "reason": "前置阶段重新完成：ui",
+        "at": "2026-11-08T16:54:12.452Z"
+      }
+    },
+    {
+      "id": "backend",
+      "applicable": true,
+      "skipReason": null,
+      "status": "pending",
+      "evidence": null,
+      "approval": null,
+      "invalidation": {
+        "reason": "前置阶段重新完成：ui",
+        "at": "2026-11-08T16:54:12.452Z"
+      }
+    },
+    {
+      "id": "test",
+      "applicable": true,
+      "skipReason": null,
+      "status": "pending",
+      "evidence": null,
+      "approval": null,
+      "invalidation": {
+        "reason": "前置阶段重新完成：ui",
+        "at": "2026-11-08T16:54:12.452Z"
+      }
+    }
+  ],
+  "events": [
+    {
+      "action": "init",
+      "profile": "fullstack",
+      "at": "2026-11-08T16:48:01.025Z"
+    },
+    {
+      "action": "finish",
+      "stage": "proposal",
+      "at": "2026-11-08T16:54:11.620Z",
+      "evidence": {
+        "path": "docs/features/nomi-video-workbench.md",
+        "sha256": "25dd72d409215fd5c7cddcb0613b336f57f086e52011da889d12b43d4df0ff83"
+      },
+      "approval": {
+        "reference": "2026-11-09 用户：可以；批准所示样板、视频专用共享口令、测试后直接部署",
+        "at": "2026-11-08T16:54:11.620Z",
+        "sha256": "25dd72d409215fd5c7cddcb0613b336f57f086e52011da889d12b43d4df0ff83"
+      }
+    },
+    {
+      "action": "finish",
+      "stage": "prototype",
+      "at": "2026-11-08T16:54:12.223Z",
+      "evidence": {
+        "path": "design/nomi-video/prototype.html",
+        "sha256": "e802a5baff39258d71b100d6916595a9e6f4806091bfc3042d4abf2e8e6306e1"
+      },
+      "approval": {
+        "reference": "2026-11-09 用户：可以；批准可操作分镜样板",
+        "at": "2026-11-08T16:54:12.223Z",
+        "sha256": "e802a5baff39258d71b100d6916595a9e6f4806091bfc3042d4abf2e8e6306e1"
+      }
+    },
+    {
+      "action": "finish",
+      "stage": "ui",
+      "at": "2026-11-08T16:54:12.452Z",
+      "evidence": {
+        "path": "design/nomi-video/prototype.html",
+        "sha256": "e802a5baff39258d71b100d6916595a9e6f4806091bfc3042d4abf2e8e6306e1"
+      },
+      "approval": {
+        "reference": "2026-11-09 用户：可以；批准所示桌面与手机布局",
+        "at": "2026-11-08T16:54:12.452Z",
+        "sha256": "e802a5baff39258d71b100d6916595a9e6f4806091bfc3042d4abf2e8e6306e1"
+      }
+    }
+  ],
+  "updatedAt": "2026-11-08T16:54:12.452Z"
+}

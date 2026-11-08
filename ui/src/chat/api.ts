@@ -1,4 +1,5 @@
 import type { ApiAnnotation } from './marks'
+import { notifyVideoAccessExpired } from './video-access-events'
 import type { GalleryRecord, JobImage, Plan, PublicFigureSource, Template } from './types'
 import type { components } from '../api/generated'
 import { getPublicFigureNames, isPublicFigureImageUrl, validatePlanFigureSources, validateFigureSources } from './public-figures'
@@ -65,7 +66,10 @@ export async function request<T = unknown>(path: string, init: RequestInit = {})
       return {}
     })
     if (response.status === 413) throw new ApiError(413, '图片提交体积过大，请压缩图片后重试')
-    if (!response.ok) throw new ApiError(response.status, errorMessage(data, '请求失败，请稍后重试'))
+    if (!response.ok) {
+      if (response.status === 401 && (path === 'videos' || path.startsWith('videos/'))) notifyVideoAccessExpired()
+      throw new ApiError(response.status, errorMessage(data, '请求失败，请稍后重试'))
+    }
     return data as T
   }, init.signal)
 }
@@ -450,8 +454,8 @@ export async function loadTemplates(): Promise<Template[]> {
 
 export type VideoJob = Wire['VideoJob']
 
-export async function loadVideos(): Promise<VideoJob[]> {
-  return videosResponseSchema.parse(await request<Wire['Videos']>('videos')).records
+export async function loadVideos(signal?: AbortSignal): Promise<VideoJob[]> {
+  return videosResponseSchema.parse(await request<Wire['Videos']>('videos', { signal })).records
 }
 
 export async function getVideo(id: string): Promise<VideoJob> {

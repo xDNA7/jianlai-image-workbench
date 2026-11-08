@@ -8,7 +8,7 @@ import { chatUsage, type VideoJob } from './api'
 import type { VideoPayload } from './video-pending'
 import type { Upload } from './useWorkbench'
 import { streamVideoChat, type VideoMessage } from './video-chat'
-import { compileStoryboard, normalizeStoryboard, resizeStoryboard, type VideoStoryboard } from './video-storyboard'
+import { compileStoryboard, duplicateStoryboardShot, moveStoryboardShot, normalizeStoryboard, removeStoryboardShot, resizeStoryboard, type VideoStoryboard } from './video-storyboard'
 import './video-conversation.css'
 
 type Turn = { id: string; user: string; text: string; status: 'streaming' | 'ready' | 'error' | 'stopped'; storyboard?: VideoStoryboard; error?: string; confirmed?: boolean }
@@ -116,24 +116,36 @@ export function VideoStudio({ accountId, quota, videoJob, videoBusy, videoError,
   }
   useEffect(() => { if (videoJob) setTurns(old => old.map(turn => turn.storyboard && compileStoryboard(turn.storyboard) === videoJob.prompt ? { ...turn, confirmed: videoJob.status !== 'failed' } : turn)) }, [videoJob])
   const download = (job: VideoJob) => { if (!job.url) return; const link = document.createElement('a'); link.href = job.url; link.download = `jianlai-video-${job.id}.mp4`; link.target = '_blank'; link.rel = 'noopener'; link.click() }
-  return <section className="jl-video-conversation" aria-label="视频对话">
+  const latestTurn = turns.at(-1)
+  const renderPlan = (turn: Turn, index: number) => {
+    const plan = turn.storyboard, latest = index === turns.length - 1, disabled = !latest || turn.confirmed || replying || videoBusy
+    let end = 0
+    return plan ? <div className="jl-video-plan"><header><strong>分镜工作区</strong><span className="text-xs text-muted-foreground">{plan.shots.length} 个镜头 · {plan.duration} 秒 · 一条完整视频</span></header>
+          {plan.notice ? <p className="jl-video-notice mx-4" role="note">{plan.notice}</p> : null}
+          <div className="jl-video-shots" role="list" aria-label="视频分镜镜头">{plan.shots.map((shot, shotIndex) => {
+            const start = end; end += shot.duration
+            const change = (field: 'scene' | 'camera', value: string) => patch(turn.id, current => ({ ...current, storyboard: { ...plan, shots: plan.shots.map((item, i) => i === shotIndex ? { ...item, [field]: value } : item) } }))
+            return <div className="jl-video-shot" key={shotIndex} role="listitem"><span className="jl-video-shot-time">{start}–{end}秒</span><div className="jl-video-shot-fields"><label>镜头 {shotIndex + 1} · 画面<textarea aria-label={`镜头${shotIndex + 1}画面`} rows={2} value={shot.scene} maxLength={200} disabled={disabled} onChange={event => change('scene', event.target.value)} /></label><label>运镜<textarea aria-label={`镜头${shotIndex + 1}运镜`} rows={1} value={shot.camera} maxLength={80} disabled={disabled} onChange={event => change('camera', event.target.value)} /></label><div className="jl-video-shot-actions">{[
+              { label: '上移', update: () => moveStoryboardShot(plan, shotIndex, shotIndex - 1), unavailable: shotIndex === 0 },
+              { label: '下移', update: () => moveStoryboardShot(plan, shotIndex, shotIndex + 1), unavailable: shotIndex === plan.shots.length - 1 },
+              { label: '复制', update: () => duplicateStoryboardShot(plan, shotIndex), unavailable: plan.shots.length >= Math.min(6, plan.duration) },
+              { label: '删除', update: () => removeStoryboardShot(plan, shotIndex), unavailable: plan.shots.length === 1 },
+            ].map(action => <Button key={action.label} variant="secondary" size="small" aria-label={`镜头${shotIndex + 1}${action.label}`} disabled={Boolean(disabled) || action.unavailable} onClick={() => patch(turn.id, current => ({ ...current, storyboard: action.update() }))}>{action.label}</Button>)}</div></div></div>
+          })}</div>
+          <p className="jl-video-edit-hint">复制或删除镜头会重新分配时长，总时长保持不变。首帧用于整条视频，不逐镜头生成。</p><div className="jl-video-options"><label>总时长<select aria-label="视频总时长" value={plan.duration} disabled={disabled} onChange={event => patch(turn.id, current => ({ ...current, storyboard: resizeStoryboard(plan, Number(event.target.value)) }))}>{Array.from({ length: 12 }, (_, i) => i + 4).filter(duration => duration >= plan.shots.length).map(duration => <option key={duration} value={duration} disabled={duration < turn.storyboard!.shots.length}>{duration} 秒</option>)}</select></label><label>画幅<select aria-label="视频画幅" value={plan.ratio} disabled={disabled || Boolean(image)} onChange={event => patch(turn.id, current => ({ ...current, storyboard: { ...plan, ratio: event.target.value as VideoStoryboard['ratio'] } }))}>{['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'].map(ratio => <option key={ratio}>{ratio}</option>)}</select></label><label>清晰度<select aria-label="视频清晰度" value={plan.resolution} disabled={disabled} onChange={event => patch(turn.id, current => ({ ...current, storyboard: { ...plan, resolution: event.target.value as VideoStoryboard['resolution'] } }))}><option>768P</option>{image ? <option>2K</option> : null}</select></label></div>
+          <div className="jl-video-confirm"><span className="text-sm text-muted-foreground">预计 {cost(plan.duration)} · ¥1.20 / 秒</span><Button disabled={Boolean(disabled) || !compileStoryboard(plan)} onClick={() => void confirm(turn)}>{turn.confirmed ? '已提交视频' : index !== turns.length - 1 ? '已有更新分镜' : videoBusy ? '生成中' : '确认分镜并生成视频'}</Button></div></div> : null
+  }
+  return <section className={`jl-video-conversation${latestTurn?.storyboard ? ' jl-video-workspace' : ''}`} aria-label="视频对话">
+    {latestTurn?.storyboard ? <div className="jl-video-editor">{renderPlan(latestTurn, turns.length - 1)}</div> : null}
+    <div className="jl-video-dialogue">
     {!turns.length && !videoJob ? <div className="jl-video-welcome"><span className="text-sm text-muted-foreground">AI 创作工作台</span><h1>创建视频</h1><p>描述想法，一起把它整理成镜头。</p><p className="text-sm">未指定时长时按 10 秒分镜，单次最多生成 15 秒。</p></div> : null}
     <div className="jl-video-messages" aria-live="polite">{turns.map((turn, index) => {
-      const plan = turn.storyboard, latest = index === turns.length - 1, disabled = !latest || turn.confirmed || replying || videoBusy
-      let end = 0
+      const plan = turn.storyboard, latest = index === turns.length - 1
       return <div key={turn.id} className="grid gap-5"><div className="jl-video-user">{turn.user}</div><div className="jl-video-assistant"><div className="jl-video-identity"><img src={avatar} alt="" /><strong>剑来</strong><span>创作助手</span></div>
         {turn.text ? <p className="whitespace-pre-wrap text-sm leading-6">{turn.text}</p> : turn.status === 'streaming' ? <p role="status" className="text-sm text-muted-foreground">正在整理分镜…</p> : null}
         {turn.status === 'error' ? <div className="jl-video-notice" role="alert"><p>{turn.error}</p><Button variant="secondary" size="small" onClick={() => void send(turn.user, undefined, true)} disabled={!latest || replying || videoBusy}>重试分镜</Button></div> : null}
         {turn.status === 'stopped' ? <p className="text-sm text-muted-foreground">已停止回复，尚未提交视频任务。</p> : null}
-        {plan ? <div className="jl-video-plan"><header><strong>视频分镜</strong><span className="text-xs text-muted-foreground">{plan.shots.length} 个镜头 · {plan.duration} 秒 · 一条完整视频</span></header>
-          {plan.notice ? <p className="jl-video-notice mx-4" role="note">{plan.notice}</p> : null}
-          <div className="jl-video-shots">{plan.shots.map((shot, shotIndex) => {
-            const start = end; end += shot.duration
-            const change = (field: 'scene' | 'camera', value: string) => patch(turn.id, current => ({ ...current, storyboard: { ...plan, shots: plan.shots.map((item, i) => i === shotIndex ? { ...item, [field]: value } : item) } }))
-            return <div className="jl-video-shot" key={shotIndex}><span className="jl-video-shot-time">{start}–{end}s</span><div className="jl-video-shot-fields"><label>镜头 {shotIndex + 1} · 画面<textarea aria-label={`镜头${shotIndex + 1}画面`} rows={2} value={shot.scene} maxLength={200} disabled={disabled} onChange={event => change('scene', event.target.value)} /></label><label>运镜<textarea aria-label={`镜头${shotIndex + 1}运镜`} rows={1} value={shot.camera} maxLength={80} disabled={disabled} onChange={event => change('camera', event.target.value)} /></label></div></div>
-          })}</div>
-          <div className="jl-video-options"><label>总时长<select aria-label="视频总时长" value={plan.duration} disabled={disabled} onChange={event => patch(turn.id, current => ({ ...current, storyboard: resizeStoryboard(plan, Number(event.target.value)) }))}>{Array.from({ length: 12 }, (_, i) => i + 4).filter(duration => duration >= plan.shots.length).map(duration => <option key={duration} value={duration} disabled={duration < turn.storyboard!.shots.length}>{duration} 秒</option>)}</select></label><label>画幅<select aria-label="视频画幅" value={plan.ratio} disabled={disabled || Boolean(image)} onChange={event => patch(turn.id, current => ({ ...current, storyboard: { ...plan, ratio: event.target.value as VideoStoryboard['ratio'] } }))}>{['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'].map(ratio => <option key={ratio}>{ratio}</option>)}</select></label><label>清晰度<select aria-label="视频清晰度" value={plan.resolution} disabled={disabled} onChange={event => patch(turn.id, current => ({ ...current, storyboard: { ...plan, resolution: event.target.value as VideoStoryboard['resolution'] } }))}><option>768P</option>{image ? <option>2K</option> : null}</select></label></div>
-          <div className="jl-video-confirm"><span className="text-sm text-muted-foreground">预计 {cost(plan.duration)} · ¥1.20 / 秒</span><Button disabled={Boolean(disabled) || !compileStoryboard(plan)} onClick={() => void confirm(turn)}>{turn.confirmed ? '已提交视频' : index !== turns.length - 1 ? '已有更新分镜' : videoBusy ? '生成中' : '确认分镜并生成视频'}</Button></div></div> : null}
+        {plan && !latest ? <details className="jl-video-history"><summary>历史分镜 · {plan.shots.length} 个镜头 · {plan.duration} 秒</summary><ol>{plan.shots.map((shot, shotIndex) => <li key={shotIndex}>{shot.scene}<span>{shot.duration} 秒 · {shot.camera}</span></li>)}</ol></details> : null}
       </div></div>
     })}
       {activeJob ? <div className="jl-video-progress" role="status"><div className="flex justify-between gap-3"><strong>正在生成</strong><span>{activeJob.progress || 0}%</span></div><progress max={100} value={Math.min(95, activeJob.progress || 1)} /><p className="text-sm text-muted-foreground">可以离开页面，回来后会继续显示任务进度。</p></div> : null}
@@ -145,6 +157,7 @@ export function VideoStudio({ accountId, quota, videoJob, videoBusy, videoError,
     <div className="jl-video-footer">{image ? <div className="jl-video-upload"><img src={image.dataUrl} alt="视频首帧" /><div className="min-w-0 flex-1"><p className="truncate">{image.name}</p><p>视频将从此首帧延展；刷新后需重新上传。</p></div><Button variant="ghost" size="small" iconOnly leadingIcon={XIcon} aria-label="移除视频首帧" disabled={replying || videoBusy || pendingVideo} onClick={() => { setImage(null); setTurns(old => old.map(turn => turn.storyboard ? { ...turn, storyboard: { ...turn.storyboard, resolution: '768P' } } : turn)) }} /></div> : null}
       <div className="jl-composer-shell"><Composer replying={replying} usage={usage} editing={false} disabled={!accountId || videoBusy} label="描述你想要的视频" placeholder="描述你想要的视频，或继续调整分镜…" uploadLabel="上传视频首帧" uploadHint="作为视频首帧；请在消息中描述镜头如何延展。" uploadReader={readFirstFrame} onSend={(text, upload) => void send(text, upload)} onStop={stop} /></div>
       <p className="mt-2 text-center text-xs text-muted-foreground">确认分镜前不提交视频任务。未指定时长默认 10 秒，单次最多 15 秒。</p>
+    </div>
     </div>
   </section>
 }

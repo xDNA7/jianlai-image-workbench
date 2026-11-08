@@ -16,7 +16,8 @@ async function fixture(page: Page) {
       if (state.failVideos) { await route.fulfill({ status: 503, json: { error: '视频列表暂时不可用' } }); return }
       await route.fulfill({ json: { records: state.videos } }); return
     }
-    const body = path.endsWith('/bootstrap') ? bootstrap(state.account)
+    const body = path.endsWith('/video-access') ? { authenticated: true }
+      : path.endsWith('/bootstrap') ? bootstrap(state.account)
       : path.endsWith('/history') ? { records: [image] }
         : path.endsWith('/videos/video') ? state.refreshed
           : path.endsWith('/chat') ? { used: 0, limit: 50 } : {}

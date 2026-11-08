@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { moveShot } from './nomi/storyboard-edits'
 
 export const videoStoryboardSchema = z.object({
   duration: z.number().int().min(4).max(15),
@@ -44,4 +45,26 @@ export function resizeStoryboard(value: VideoStoryboard, duration: number): Vide
   const order = weights.map((weight, index) => ({ index, remainder: weight % 1 })).sort((a, b) => b.remainder - a.remainder)
   for (const { index } of order) { if (extra-- <= 0) break; counts[index]++ }
   return { ...value, duration, shots: value.shots.map((shot, index) => ({ ...shot, duration: counts[index] })) }
+}
+
+
+export function moveStoryboardShot(value: VideoStoryboard, from: number, to: number): VideoStoryboard {
+  const shots = moveShot(value.shots, from, to)
+  return shots === value.shots ? value : { ...value, shots }
+}
+
+function redistributeShots(value: VideoStoryboard, shots: VideoStoryboard['shots']): VideoStoryboard {
+  return resizeStoryboard({ ...value, shots, duration: shots.reduce((total, shot) => total + shot.duration, 0) }, value.duration)
+}
+
+export function duplicateStoryboardShot(value: VideoStoryboard, index: number): VideoStoryboard {
+  if (!Number.isInteger(index) || index < 0 || index >= value.shots.length || value.shots.length >= Math.min(6, value.duration)) return value
+  const shots = [...value.shots]
+  shots.splice(index + 1, 0, { ...shots[index] })
+  return redistributeShots(value, shots)
+}
+
+export function removeStoryboardShot(value: VideoStoryboard, index: number): VideoStoryboard {
+  if (!Number.isInteger(index) || index < 0 || index >= value.shots.length || value.shots.length <= 1) return value
+  return redistributeShots(value, value.shots.filter((_, current) => current !== index))
 }

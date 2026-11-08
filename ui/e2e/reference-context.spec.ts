@@ -23,6 +23,7 @@ async function install(page: Page) {
     const request = route.request()
     const path = new URL(request.url()).pathname
     const method = request.method()
+    if (method === 'GET' && path.endsWith('/video-access')) return json(route, { authenticated: false })
     if (method === 'GET' && path.endsWith('/bootstrap')) return json(route, {
       accountId: 'reference-context', availableCents: 5000 - mock.generates.length * 30,
       imagePriceCents: 30, activeJob: null, activeVideo: null,
