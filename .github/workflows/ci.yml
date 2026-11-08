@@ -33,6 +33,8 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then revision="$GITHUB_REF"; fi
           python3 scripts/public_repo_check.py --repo . --revision "$revision" --ref-name "$GITHUB_REF" --policy scripts/public_repo_policy.json
       - name: Install pinned secret scanner
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/install-gitleaks.sh "$RUNNER_TEMP/gitleaks"
       - name: Scan full history including the initial commit
         shell: bash
