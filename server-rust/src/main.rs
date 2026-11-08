@@ -369,8 +369,17 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     if app.config("MAINTENANCE_MODE") != "1" {
         store::recover(&app)?;
         video::resume(&app).await?;
-        store::cleanup(&app)?;
-        video::cleanup(&app)?;
+        // OSS retention can require slow remote deletion. Recovery stays before
+        // admission, but housekeeping must not block the HTTP listener.
+        let cleanup = app.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(error) = store::cleanup(&cleanup) {
+                tracing::error!(code = error.0, "startup_cleanup_failed");
+            }
+            if let Err(error) = video::cleanup(&cleanup) {
+                tracing::error!(code = error.0, "startup_video_cleanup_failed");
+            }
+        });
     }
     if app.config("MAINTENANCE_MODE") != "1" {
         let worker = app.clone();
