@@ -435,6 +435,20 @@ export interface components {
             limit: number;
         };
         ChatRequest: {
+            /**
+             * @default image
+             * @enum {string}
+             */
+            mode: "image" | "video";
+            /** @description Current editable storyboard settings; explicit duration in the latest user message overrides these defaults. */
+            video?: {
+                /** @default 10 */
+                duration: number;
+                /** @enum {string} */
+                ratio?: "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9";
+                /** @enum {string} */
+                resolution?: "768P" | "2K";
+            };
             messages: {
                 /** @enum {string} */
                 role: "user" | "assistant";
@@ -443,6 +457,21 @@ export interface components {
             reference?: {
                 prompt: string;
             };
+        };
+        /** @description A plan for one complete video. All shot durations sum to duration. This is an SSE storyboard event, not a generated media task. */
+        VideoStoryboard: {
+            duration: number;
+            /** @enum {string} */
+            ratio: "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9";
+            /** @enum {string} */
+            resolution: "768P" | "2K";
+            /** @description Server-owned policy notice when requested duration was shortened to 15 seconds or increased to 4 seconds. */
+            notice?: string;
+            shots: {
+                duration: number;
+                scene: string;
+                camera: string;
+            }[];
         };
         VideoRequest: {
             requestKey: string;
@@ -643,7 +672,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Server-sent events */
+            /** @description Server-sent events meta/delta/done/error. Default image mode emits a validated plan event. Video mode emits a validated storyboard event (VideoStoryboard schema), never a generation task. The user must explicitly confirm before a separate POST /api/videos. Missing running time defaults to 10 seconds; requests above 15 seconds are optimized to 15 seconds with a server-generated notice. Existing chat quota and concurrency limits apply to both modes. */
             200: {
                 headers: {
                     [name: string]: unknown;

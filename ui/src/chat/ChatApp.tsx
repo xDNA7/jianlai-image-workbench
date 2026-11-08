@@ -7,6 +7,8 @@ import { AnnotateDialog } from './AnnotateDialog'
 import type { AnnotateTarget } from './AnnotateDialog'
 import { Composer } from './Composer'
 import { GalleryPanel } from './Gallery'
+import { VideoLightbox } from './VideoLightbox'
+import type { GalleryFilter, GalleryVideo } from './media-gallery'
 import { Lightbox } from './Lightbox'
 import type { LightboxImage } from './Lightbox'
 import { isFavoriteImage } from './store'
@@ -45,8 +47,10 @@ export function ChatApp() {
   }, [view, templatesState, ensureTemplates])
   const [menuOpen, setMenuOpen] = useState(false)
   const [galleryDrawer, setGalleryDrawer] = useState(false)
-  const [filter, setFilter] = useState<'all' | 'favorites'>('all')
+  const [filter, setFilter] = useState<GalleryFilter>('all')
   const [lightbox, setLightbox] = useState<LightboxImage | null>(null)
+  const [videoSelection, setVideoSelection] = useState<{ accountId: string | null; video: GalleryVideo } | null>(null)
+  const videoLightbox = videoSelection?.accountId === (w.boot?.accountId ?? null) ? videoSelection.video : null
   const [composerEpoch, setComposerEpoch] = useState(0)
   const [draft, setDraft] = useState<{ text: string; nonce: number }>()
   const [annotating, setAnnotating] = useState<AnnotateTarget | null>(null)
@@ -102,6 +106,9 @@ export function ChatApp() {
   const gallery = (
     <GalleryPanel
       records={w.gallery}
+      videos={w.videoGallery}
+      videoState={w.videoGalleryState}
+      onOpenVideo={video => setVideoSelection({ accountId: w.boot?.accountId ?? null, video })}
       state={w.galleryState}
       favorites={w.favorites}
       filter={filter}
@@ -166,7 +173,7 @@ export function ChatApp() {
               {!desktop ? <Button variant="ghost" iconOnly leadingIcon={MenuIcon} aria-label="打开菜单" onClick={() => setMenuOpen(true)} /> : null}
               <span>{titles[view]}</span>
             </div>
-            <Button variant="ghost" leadingIcon={ImagesIcon} aria-label="打开画廊" aria-expanded={galleryDrawer} onClick={() => setGalleryDrawer(true)}>作品<span className="jl-artwork-count">{w.gallery.length}</span></Button>
+            <Button variant="ghost" leadingIcon={ImagesIcon} aria-label="打开画廊" aria-expanded={galleryDrawer} onClick={() => { w.ensureGallery(); setGalleryDrawer(true) }}>作品<span className="jl-artwork-count">{w.gallery.length + w.videoGallery.length}</span></Button>
           </header>
           {view === 'chat' ? (
             <>
@@ -184,6 +191,7 @@ export function ChatApp() {
       </div>
       <SideDrawer open={!desktop && menuOpen} onOpenChange={setMenuOpen} side="left" title="菜单">{sidebar}</SideDrawer>
       <SideDrawer open={galleryDrawer} onOpenChange={setGalleryDrawer} side="right" title="画廊">{gallery}</SideDrawer>
+      {videoLightbox ? <VideoLightbox key={`${w.boot?.accountId}:${videoLightbox.id}`} video={videoLightbox} onClose={() => setVideoSelection(null)} /> : null}
       <AnnotateDialog target={annotating} onCancel={() => setAnnotating(null)} onConfirm={confirmEdit} />
       <Lightbox image={current} favorite={current ? isFavoriteImage(w.favorites, current) : false} onClose={() => setLightbox(null)} onFavorite={w.toggleFavorite} onSaveTemplate={w.saveMine} onContinue={(image) => startEdit(image)} onDelete={w.deleteImage} />
     </MotionConfig>

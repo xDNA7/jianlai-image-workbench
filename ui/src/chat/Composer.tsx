@@ -15,6 +15,12 @@ type Props = {
   editing: boolean
   /** Marks were placed on the picked image, so an empty message is allowed. */
   canSendEmpty?: boolean
+  label?: string
+  placeholder?: string
+  uploadHint?: string
+  uploadLabel?: string
+  disabled?: boolean
+  uploadReader?: (file: File) => Promise<string>
   onSend: (text: string, upload?: Upload) => void
   onStop: () => void
   onPickReference?: () => void
@@ -23,7 +29,7 @@ type Props = {
   draft?: { text: string; nonce: number }
 }
 
-export function Composer({ replying, usage, editing, canSendEmpty, onSend, onStop, onPickReference, textareaRef, draft }: Props) {
+export function Composer({ replying, usage, editing, canSendEmpty, onSend, onStop, onPickReference, textareaRef, draft, label, placeholder, uploadHint, uploadLabel, disabled, uploadReader }: Props) {
   const [text, setText] = useState('')
   useEffect(() => {
     if (draft) setText(draft.text)
@@ -35,7 +41,7 @@ export function Composer({ replying, usage, editing, canSendEmpty, onSend, onSto
   useEffect(() => () => { pickVersion.current += 1 }, [])
   const fileRef = useRef<HTMLInputElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
-  const canSend = (text.trim().length > 0 || Boolean(canSendEmpty)) && !replying && !reading
+  const canSend = (text.trim().length > 0 || Boolean(canSendEmpty)) && !replying && !reading && !disabled
 
   const pick = async (file?: File) => {
     if (!file) return
@@ -46,7 +52,7 @@ export function Composer({ replying, usage, editing, canSendEmpty, onSend, onSto
     setUpload(null)
     setReading(true)
     try {
-      const dataUrl = await fileToDataUrl(file)
+      const dataUrl = await (uploadReader || fileToDataUrl)(file)
       if (version === pickVersion.current) setUpload({ id: crypto.randomUUID(), name: file.name, dataUrl })
     } catch (error) {
       if (version === pickVersion.current) setError(error instanceof Error ? error.message : '图片读取失败，请重试')
@@ -87,7 +93,7 @@ export function Composer({ replying, usage, editing, canSendEmpty, onSend, onSto
             </div>
             <div className="min-w-0 text-sm leading-5">
               <p className="break-all">{upload.name}</p>
-              <p className="text-muted-foreground">按本次照片与新指令创作，不沿用之前的描述。</p>
+              <p className="text-muted-foreground">{uploadHint || '按本次照片与新指令创作，不沿用之前的描述。'}</p>
             </div>
           </InputGroupAddon>
         ) : null}
@@ -96,8 +102,8 @@ export function Composer({ replying, usage, editing, canSendEmpty, onSend, onSto
           value={text}
           maxLength={2000}
           rows={2}
-          aria-label="描述你想要的画面"
-          placeholder={editing ? '说说想怎么修改这张图…' : '描述你想要的画面…'}
+          aria-label={label || '描述你想要的画面'}
+          placeholder={placeholder || (editing ? '说说想怎么修改这张图…' : '描述你想要的画面…')}
           className="max-h-48 min-h-14 p-3 text-base"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -121,7 +127,7 @@ export function Composer({ replying, usage, editing, canSendEmpty, onSend, onSto
             iconOnly
             leadingIcon={PaperclipIcon}
             className="rounded-full"
-            aria-label="上传参考图"
+            aria-label={uploadLabel || '上传参考图'}
             onClick={() => fileRef.current?.click()}
           />
           <span className="ml-auto text-xs text-muted-foreground" aria-live="polite">

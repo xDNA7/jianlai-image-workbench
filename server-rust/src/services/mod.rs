@@ -9,3 +9,4 @@ pub mod submissions;
 pub mod templates;
 pub mod upstream;
 pub mod video;
+pub(crate) mod video_storyboard;

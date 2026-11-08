@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useForm } from 'react-hook-form'
 import { VideoStudio } from './VideoStudio'
-import { ApiError, getVideo, getVideoByRequest, loadVideos, request, type VideoJob } from './api'
-import { videoFormSchema, type VideoFormValues } from './schemas'
+import { ApiError, getVideo, getVideoByRequest, request, type VideoJob } from './api'
 import { clearPendingVideo, readPendingVideo, videoPayloadHash, writePendingVideo, type PendingVideo, type VideoPayload } from './video-pending'
 
 type Props = {
@@ -25,13 +23,7 @@ export default function VideoPane({ accountId, balance, onBalance }: Props) {
   const alive = useRef(true)
   const balanceCallback = useRef(onBalance)
   balanceCallback.current = onBalance
-  const form = useForm<VideoFormValues>({
-    defaultValues: { prompt: '', image: null, seconds: 5, ratio: '16:9', resolution: '768P' },
-  })
-  const values = form.watch()
   const queryClient = useQueryClient()
-  const recordsKey = ['videos', accountId]
-  const recordsQuery = useQuery({ queryKey: recordsKey, queryFn: loadVideos, enabled: Boolean(accountId), retry: 1 })
   const activeQuery = useQuery({
     queryKey: ['video-job', accountId, job?.id],
     queryFn: () => {
@@ -174,24 +166,12 @@ export default function VideoPane({ accountId, balance, onBalance }: Props) {
     } finally { locked.current = false }
   }
 
-  const setField = <K extends keyof VideoFormValues>(key: K, value: VideoFormValues[K]) => {
-    const next = { ...form.getValues(), [key]: value }
-    if (!videoFormSchema.safeParse(next).success) return
-    form.setValue(key, value as never, { shouldDirty: true, shouldValidate: true })
-  }
   return (
-    <div className="studio-shell mx-auto w-full max-w-5xl px-4 pb-10">
-      <VideoStudio
-        quota={balance} videoRecords={recordsQuery.data || []} videoJob={job}
-        videoPrompt={values.prompt} setVideoPrompt={value => setField('prompt', value)}
-        videoImage={values.image} setVideoImage={value => setField('image', value)}
-        videoSeconds={values.seconds} setVideoSeconds={value => setField('seconds', value)}
-        videoRatio={values.ratio} setVideoRatio={value => setField('ratio', value as VideoFormValues['ratio'])}
-        videoResolution={values.resolution} setVideoResolution={value => setField('resolution', value as VideoFormValues['resolution'])}
-        videoBusy={busy} videoError={error} setVideoError={setError}
-        submitVideo={submit} pendingVideo={hasPending} checkPendingVideo={checkPending}
-        loadVideos={() => queryClient.invalidateQueries({ queryKey: ['videos', accountId], exact: true })}
-      />
-    </div>
+    <VideoStudio
+      key={accountId || 'pending'} accountId={accountId}
+      quota={balance} videoJob={job} videoBusy={busy} videoError={error}
+      submitVideo={submit} pendingVideo={hasPending} checkPendingVideo={checkPending}
+      retryJob={() => { void activeQuery.refetch() }}
+    />
   )
 }

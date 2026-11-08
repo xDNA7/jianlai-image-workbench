@@ -2,7 +2,7 @@ import { getPublicFigureContext, getPublicFigureNames, validatePlanFigureSources
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ApiError, bootstrap, chatUsage, fileToDataUrl, getJob, imageToDataUrl, loadGallery, loadTemplates,
+  ApiError, bootstrap, chatUsage, fileToDataUrl, getJob, imageToDataUrl, loadGallery, loadTemplates, loadVideos,
   newRequestKey, removeGalleryImage, streamChat, submitGenerate, compressImageDataUrl,
   findJobByRequestKey, searchPublicFigure,
 } from './api'
@@ -11,6 +11,7 @@ import {
   savePrivateTemplates, saveThread, toChatMessages, toggleFavoriteKeys,
 } from './store'
 import type { FavoriteTarget } from './store'
+import { completedVideos } from './media-gallery'
 import { referencePromptWithMarks, toApiAnnotations } from './marks'
 import type { Mark } from './marks'
 import type {
@@ -47,6 +48,7 @@ export function useWorkbench() {
   const [favorites, setFavorites] = useState<string[]>(() => loadFavorites(storage()))
   const [pinned, setPinned] = useState<{ url: string; preview: string; prompt: string; marks: Mark[] } | null>(null)
   const [templatesRequested, setTemplatesRequested] = useState(false)
+  const [galleryRequested, setGalleryRequested] = useState(false)
   const [mine, setMine] = useState<Template[]>(() => loadPrivateTemplates(storage()))
   const itemsRef = useRef(items)
   itemsRef.current = items
@@ -82,6 +84,15 @@ export function useWorkbench() {
     enabled: ready,
     retry: 1,
   })
+  const videosQuery = useQuery({
+    queryKey: ['videos', accountId],
+    queryFn: loadVideos,
+    enabled: ready && galleryRequested,
+    retry: 1,
+  })
+  const videoGallery = completedVideos(videosQuery.data || [])
+  const videoGalleryState: 'idle' | 'loading' | 'ready' | 'error' = !galleryRequested && !videosQuery.data ? 'idle' : videosQuery.isError ? 'error' : videosQuery.data ? 'ready' : 'loading'
+  const ensureGallery = useCallback(() => setGalleryRequested(true), [])
   const templatesQuery = useQuery({
     queryKey: ['templates', accountId],
     queryFn: loadTemplates,
@@ -105,7 +116,11 @@ export function useWorkbench() {
   }, [])
   const refreshGallery = useCallback(async () => {
     if (!accountId) return
-    await queryClient.refetchQueries({ queryKey: ['history', 'gallery', accountId], exact: true })
+    setGalleryRequested(true)
+    await Promise.all([
+      queryClient.refetchQueries({ queryKey: ['history', 'gallery', accountId], exact: true }),
+      queryClient.refetchQueries({ queryKey: ['videos', accountId], exact: true }),
+    ])
   }, [accountId, queryClient])
 
   useEffect(() => {
@@ -506,7 +521,7 @@ export function useWorkbench() {
   const price = boot?.capabilities.priceCents ?? 30
   return {
     boot, bootError, ready, items, balance, usage, replying, busy, price,
-    gallery, galleryState, favorites, templates, templatesState, mine, saveMine, removeMine,
+    gallery, galleryState, videoGallery, videoGalleryState, ensureGallery, favorites, templates, templatesState, mine, saveMine, removeMine,
     send, stopReplying, updatePlan, rebindReference, uploadPersonReference, dismissPlan, confirmPlan, generateAsWritten,
     refreshBalance, pinned, pin, unpin, stopWaiting, retryPolling, retryGeneration, clearAll, refreshGallery, toggleFavorite, deleteImage, ensureTemplates,
   }

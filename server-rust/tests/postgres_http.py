@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Real PostgreSQL/HTTP ledger tests; local providers only, no production config."""
-import base64, concurrent.futures, hashlib, http.server, json, os, pathlib, secrets, shutil, socket, struct, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
+import base64, concurrent.futures, hashlib, http.server, json, os, pathlib, re, secrets, shutil, socket, struct, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 BINARY=pathlib.Path(os.environ.get('JIANLAI_TEST_BINARY','/tmp/jianlai-pg-target/debug/image-workbench-server'))
 DB='jianlai_test_business_'+secrets.token_hex(6)
@@ -42,6 +42,21 @@ class Provider(http.server.BaseHTTPRequestHandler):
         elif self.path.endswith('/v2/video_generation'):
             self.send_response(200);result={'task_id':'mock-video'}
         elif self.path.endswith('/chat/completions'):
+            if value.get('stream') is True:
+                messages=value['messages'];system='\n'.join(item['content'] for item in messages if item['role']=='system')
+                video='视频分镜创作助手' in system
+                if video:
+                    duration=int(re.search(r'本次总时长固定为(\d+)秒',system)[1])
+                    plan={'duration':duration,'ratio':'16:9','resolution':'768P','shots':[
+                        {'duration':duration//2,'scene':'雨后城市的暖色灯光','camera':'低机位缓慢推进'},
+                        {'duration':duration-duration//2,'scene':'窗边的行人和咖啡店','camera':'缓慢抬镜，保持主体连贯'}]}
+                else:
+                    plan={'prompt':'A rainy city','size':'1024x1024','quality':'medium','count':1,'useReference':False}
+                if 'INVALID_STORYBOARD_TEST' in messages[-1]['content']:
+                    plan={'duration':10,'shots':[{'duration':0,'scene':'','camera':''}]}
+                content='已整理为可编辑方案。\n<<<PLAN>>>\n'+json.dumps(plan,ensure_ascii=False)
+                body='data: '+json.dumps({'choices':[{'delta':{'content':content}}]},ensure_ascii=False)+'\n\ndata: [DONE]\n\n'
+                self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers();self.wfile.write(body.encode());return
             self.send_response(200); result={'choices':[{'message':{'content':json.dumps({'title':'测试模板','category':'poster','prompt':'A test poster','tags':[],'parameters':[],'parameterDefaults':{}})}}]}
         else:self.send_response(404);result={}
         self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(result).encode())
@@ -91,6 +106,9 @@ VIDEO_API_BASE=http://127.0.0.1:{PROVIDER.server_port}
 VISION_API_KEY=local-test-only
 VISION_API_BASE=http://127.0.0.1:{PROVIDER.server_port}/v1
 VISION_MODEL=local-test
+CHAT_API_KEY=local-test-only
+CHAT_API_BASE=http://127.0.0.1:{PROVIDER.server_port}/v1
+CHAT_MODEL=local-test
 OSS_PUBLIC_BUCKET=mock-bucket
 OSS_PUBLIC_BASE=http://127.0.0.1:{PROVIDER.server_port}
 OSS_PUBLIC_PREFIX=local-test
@@ -142,6 +160,31 @@ try:
     one,c1=bootstrap(port);two,c2=bootstrap(port2)
     assert not list(WORK.glob('data*/state.sqlite'))
     check('postgres starts without SQLite and bootstrap persists account')
+    def chat_events(payload):
+        code,body,headers=req(port,'/api/chat',payload,c1)
+        assert code==200 and headers.get('Content-Type','').startswith('text/event-stream'),(code,body)
+        result=[]
+        for block in body.decode().split('\n\n'):
+            event=next((line[7:] for line in block.splitlines() if line.startswith('event: ')),None)
+            data=next((line[6:] for line in block.splitlines() if line.startswith('data: ')),None)
+            if event and data:result.append((event,json.loads(data)))
+        return result
+    untouched=psql('SELECT (SELECT count(*) FROM jobs)::text || \':\' || (SELECT count(*) FROM video_jobs)::text || \':\' || (SELECT balance FROM shared_ledger WHERE id=1)::text')
+    for content,seconds,limited in [('做一条雨后城市短片',10,False),('做20秒的城市短片',15,True),('做三十秒的城市短片',15,True),('做1分钟的城市短片',15,True),('做8秒的城市短片',8,False),('不要20秒，改为10秒',10,False),('从20秒缩短到8秒',8,False)]:
+        events=chat_events({'mode':'video','messages':[{'role':'user','content':content}]})
+        plans=[data for name,data in events if name=='storyboard'];assert len(plans)==1,events
+        plan=plans[0];assert plan['duration']==seconds and sum(shot['duration'] for shot in plan['shots'])==seconds,plan
+        assert not any(name=='plan' or name=='error' for name,_ in events),events
+        if limited:assert '最多一次性生成 15 秒' in plan['notice'],plan
+    events=chat_events({'mode':'video','video':{'duration':12},'messages':[{'role':'user','content':'光线再温暖一点'}]})
+    assert next(data for name,data in events if name=='storyboard')['duration']==12
+    events=chat_events({'mode':'video','messages':[{'role':'user','content':'INVALID_STORYBOARD_TEST'}]})
+    assert any(name=='error' for name,_ in events) and not any(name=='storyboard' for name,_ in events),events
+    events=chat_events({'messages':[{'role':'user','content':'生成雨后城市图片'}]})
+    assert any(name=='plan' for name,_ in events) and not any(name=='storyboard' for name,_ in events),events
+    assert req(port,'/api/chat',{'mode':'unexpected','messages':[{'role':'user','content':'bad mode'}]},c1)[0]==400
+    assert psql('SELECT (SELECT count(*) FROM jobs)::text || \':\' || (SELECT count(*) FROM video_jobs)::text || \':\' || (SELECT balance FROM shared_ledger WHERE id=1)::text')==untouched
+    check('video storyboard defaults to ten seconds, clamps explicit long duration, retains editing context and never creates/bills tasks; image chat contract unchanged')
     sql_null_job='d'*32;json_null_job='c'*32
     psql(f"INSERT INTO jobs(id,account,request_key,status,params,result,created) VALUES('{sql_null_job}','{one['accountId']}','legacy-sql-null-00001','done',NULL,NULL,0),('{json_null_job}','{one['accountId']}','legacy-json-null-0001','done','null'::jsonb,'null'::jsonb,0)")
     assert req(port,'/api/jobs/'+sql_null_job,cookie=c1)[0]==200
