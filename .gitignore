@@ -37,3 +37,4 @@ ui/dist/
 ui/.react-router/
 ui/test-results/
 dist/frontend-spa/
+dist/frontend-e2e/
