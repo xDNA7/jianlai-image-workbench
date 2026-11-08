@@ -12,7 +12,7 @@ export default defineConfig({
     { name: 'mobile', use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 } } },
   ],
   webServer: {
-    command: 'VITE_APP_BASE=/ VITE_OUT_DIR=../dist/frontend-e2e bun run build && VITE_APP_BASE=/ VITE_OUT_DIR=../dist/frontend-e2e bun run preview -- --host 127.0.0.1 --port 4173 --strictPort',
+    command: 'VITE_APP_BASE=/ VITE_OUT_DIR=../dist/frontend-e2e bun run build && node scripts/serve-client.mjs ../dist/frontend-e2e 4173',
     url: 'http://127.0.0.1:4173/',
     reuseExistingServer: false,
     timeout: 120_000,

@@ -6,7 +6,7 @@ async function fixture(page: Page) {
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname
     let body: unknown = {}
-    if (path.endsWith('/bootstrap')) body = { accountId: 'upload-account', availableCents: 5000, imagePriceCents: 30 }
+    if (path.endsWith('/bootstrap')) body = { accountId: 'upload-account', availableCents: 5000, imagePriceCents: 30, capabilities: { sizes: [], qualities: [] } }
     else if (path.endsWith('/history') || path.endsWith('/videos')) body = { records: [] }
     else if (path.endsWith('/chat') && route.request().method() === 'GET') body = { used: 0, limit: 50 }
     else if (path.endsWith('/chat')) {
