@@ -1,8 +1,21 @@
 import type { ApiAnnotation } from './marks'
-import type { Capabilities, GalleryRecord, JobImage, Plan, PublicFigureSource, Template } from './types'
+import type { GalleryRecord, JobImage, Plan, PublicFigureSource, Template } from './types'
+import type { components } from '../api/generated'
 import { getPublicFigureNames, isPublicFigureImageUrl, validatePlanFigureSources, validateFigureSources } from './public-figures'
 export { validateCommonsResult, validateFigureSources } from './public-figures'
-import { bootstrapSchema, jobStateSchema } from '../schemas/api'
+import { bootstrapSchema, jobStateSchema, bootstrapResponseSchema, imageJobResponseSchema, historyResponseSchema, templatesResponseSchema, videoJobResponseSchema, videosResponseSchema, chatUsageResponseSchema, type BootstrapContract } from '../schemas/api'
+
+type Wire = components['schemas']
+type RawBootstrap = Wire['Bootstrap']
+type RawImageJob = Wire['ImageJob']
+
+function object(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+function errorMessage(value: unknown, fallback: string): string {
+  const message = object(value).error
+  return typeof message === 'string' && message.trim() ? message : fallback
+}
 
 const assetBase = (import.meta.env.VITE_PUBLIC_ASSET_BASE || (typeof process !== 'undefined' ? process.env.VITE_PUBLIC_ASSET_BASE : '') || 'https://public-assets.example/assets/').replace(/\/?$/, '/')
 const ossBase = assetBase.startsWith('/') ? `${assetBase}jianlai/` : `${assetBase}jianlai/`
@@ -38,19 +51,21 @@ async function withRequestTimeout<T>(run: (signal: AbortSignal) => Promise<T>, s
   }
 }
 
-export async function request<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+export function request(path: 'bootstrap', init?: RequestInit): Promise<RawBootstrap>
+export function request<T = unknown>(path: string, init?: RequestInit): Promise<T>
+export async function request<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   return withRequestTimeout(async (signal) => {
     const headers = new Headers(init.headers)
     if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
     const response = await fetch(`${apiBase()}api/${path}`, {
       ...init, credentials: 'same-origin', headers, signal,
     })
-    const data = await response.json().catch((error) => {
+    const data: unknown = await response.json().catch((error) => {
       if (signal.aborted) throw error
       return {}
     })
     if (response.status === 413) throw new ApiError(413, '图片提交体积过大，请压缩图片后重试')
-    if (!response.ok) throw new ApiError(response.status, data?.error || '请求失败，请稍后重试')
+    if (!response.ok) throw new ApiError(response.status, errorMessage(data, '请求失败，请稍后重试'))
     return data as T
   }, init.signal)
 }
@@ -67,13 +82,7 @@ export function assetUrl(value: unknown): string {
   return /^(https?:|data:|blob:)/.test(s) ? s : `${apiBase()}${s.replace(/^(?:\.\.\/|\/)+/, '')}`
 }
 
-export type Bootstrap = {
-  accountId: string
-  availableCents: number | null
-  capabilities: Capabilities
-  activeJobId?: string
-  activeRequestKey?: string
-}
+export type Bootstrap = BootstrapContract
 
 const fallbackSizes = [
   { value: 'auto', label: '自动画幅' },
@@ -89,12 +98,11 @@ const fallbackQualities = [
 ]
 
 export async function bootstrap(): Promise<Bootstrap> {
-  const v = await request('bootstrap')
-  const cents = Number(v.availableCents)
-  const caps = v.capabilities || {}
+  const v = bootstrapResponseSchema.parse(await request('bootstrap'))
+  const caps = v.capabilities
   return bootstrapSchema.parse({
     accountId: String(v.accountId || 'anonymous'),
-    availableCents: Number.isFinite(cents) ? cents : null,
+    availableCents: v.availableCents,
     capabilities: {
       sizes: Array.isArray(caps.sizes) && caps.sizes.length ? caps.sizes : fallbackSizes,
       qualities: Array.isArray(caps.qualities) && caps.qualities.length ? caps.qualities : fallbackQualities,
@@ -130,13 +138,14 @@ export function createSseParser() {
   }
 }
 
-export function normalizePlan(v: any): Plan | null {
-  const prompt = String(v?.prompt || '').trim()
+export function normalizePlan(value: unknown): Plan | null {
+  const v = object(value)
+  const prompt = String(v.prompt || '').trim()
   if (!prompt) return null
   const useReference = Boolean(v.useReference)
   const publicFigure = typeof v.publicFigure === 'string' && v.publicFigure.trim().length <= 120 ? v.publicFigure.trim() : undefined
   const publicFigureVisual = v.publicFigureVisual === true
-  const publicFigures = Array.isArray(v.publicFigures) && v.publicFigures.length <= 2 && v.publicFigures.every((name: unknown) => typeof name === 'string' && name.trim() && name.trim().length <= 120) ? v.publicFigures.map((name: string) => name.trim()) : undefined
+  const publicFigures = Array.isArray(v.publicFigures) && v.publicFigures.length <= 2 && v.publicFigures.every((name: unknown) => typeof name === 'string' && name.trim() && name.trim().length <= 120) ? v.publicFigures.map((name: unknown) => String(name).trim()) : undefined
   const publicFigureContext = typeof v.publicFigureContext === 'string' ? v.publicFigureContext.trim().slice(0, 80) : undefined
   return {
     prompt,
@@ -152,19 +161,20 @@ export function normalizePlan(v: any): Plan | null {
   }
 }
 
-export function parseCommonsSearch(payload: any): PublicFigureSource[] {
-  const pages = payload?.query?.pages
+export function parseCommonsSearch(payload: unknown): PublicFigureSource[] {
+  const pages = object(object(payload).query).pages
   if (!pages || typeof pages !== 'object') return []
-  return Object.values(pages).flatMap((page: any) => {
-    const info = page?.imageinfo?.[0]
-    const meta = info?.extmetadata || {}
-    const sourceUrl = String(info?.descriptionurl || '')
-    const thumbUrl = String(info?.thumburl || '')
-    const imageUrl = String(info?.url || thumbUrl)
-    const artist = String(meta.Artist?.value || '').replace(/<[^>]+>/g, '').trim()
-    const license = String(meta.LicenseShortName?.value || '').replace(/<[^>]+>/g, '').trim()
-    if (!page?.title || !thumbUrl.startsWith('https://upload.wikimedia.org/') || !imageUrl.startsWith('https://upload.wikimedia.org/') || !sourceUrl.startsWith('https://commons.wikimedia.org/') || !artist || !license) return []
-    return [{ title: String(page.title), thumbUrl, imageUrl, sourceUrl, artist, license, licenseUrl: String(meta.LicenseUrl?.value || '') || undefined }]
+  return Object.values(pages).flatMap((value: unknown) => {
+    const page = object(value)
+    const info = object(Array.isArray(page.imageinfo) ? page.imageinfo[0] : undefined)
+    const meta = object(info.extmetadata)
+    const sourceUrl = String(info.descriptionurl || '')
+    const thumbUrl = String(info.thumburl || '')
+    const imageUrl = String(info.url || thumbUrl)
+    const artist = String(object(meta.Artist).value || '').replace(/<[^>]+>/g, '').trim()
+    const license = String(object(meta.LicenseShortName).value || '').replace(/<[^>]+>/g, '').trim()
+    if (!page.title || !thumbUrl.startsWith('https://upload.wikimedia.org/') || !imageUrl.startsWith('https://upload.wikimedia.org/') || !sourceUrl.startsWith('https://commons.wikimedia.org/') || !artist || !license) return []
+    return [{ title: String(page.title), thumbUrl, imageUrl, sourceUrl, artist, license, licenseUrl: String(object(meta.LicenseUrl).value || '') || undefined }]
   }).slice(0, 6)
 }
 
@@ -196,7 +206,7 @@ export async function streamChat(payload: ChatPayload, handlers: ChatHandlers, s
   })
   if (!response.ok || !response.body) {
     const data = await response.json().catch(() => ({}))
-    throw new ApiError(response.status, data.error || '对话服务暂时不可用')
+    throw new ApiError(response.status, errorMessage(data, '对话服务暂时不可用'))
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
@@ -205,13 +215,13 @@ export async function streamChat(payload: ChatPayload, handlers: ChatHandlers, s
     const { value, done } = await reader.read()
     const events = parse(done ? decoder.decode() : decoder.decode(value, { stream: true }))
     for (const e of events) {
-      const data = JSON.parse(e.data || '{}')
+      const data = object(JSON.parse(e.data || '{}'))
       if (e.event === 'meta') handlers.onMeta?.(Number(data.used), Number(data.limit))
       else if (e.event === 'delta') handlers.onDelta(String(data.text || ''))
       else if (e.event === 'plan') {
         const plan = normalizePlan(data)
         if (plan) handlers.onPlan(plan)
-      } else if (e.event === 'error') throw new ApiError(502, data.error || '对话服务暂时不可用')
+      } else if (e.event === 'error') throw new ApiError(502, errorMessage(data, '对话服务暂时不可用'))
       else if (e.event === 'done') return
     }
     if (done) throw new ApiError(502, '对话中断，请重试')
@@ -334,11 +344,12 @@ export type JobState = {
   images: JobImage[]
 }
 
-export function toJobImages(job: any, prompt: string, text = ''): JobImage[] {
-  return (Array.isArray(job?.images) ? job.images : []).map((i: any) => ({
+export function toJobImages(value: unknown, prompt: string, text = ''): JobImage[] {
+  const job = imageJobResponseSchema.parse(value)
+  return job.images.map(i => ({
     id: `${job.id}-${i.index}`,
-    jobId: String(job.id),
-    index: Number(i.index),
+    jobId: job.id,
+    index: i.index,
     preview: assetUrl(i.previewUrl || i.url),
     download: assetUrl(i.downloadUrl || i.url),
     prompt,
@@ -346,15 +357,15 @@ export function toJobImages(job: any, prompt: string, text = ''): JobImage[] {
   }))
 }
 
-export function toJobState(job: any, prompt: string, text = ''): JobState {
-  const cents = Number(job?.availableCents)
+export function toJobState(value: unknown, prompt: string, text = ''): JobState {
+  const job = imageJobResponseSchema.parse(value)
   return {
-    id: String(job.id),
-    status: job.status === 'done' ? 'done' : job.status === 'failed' ? 'failed' : 'running',
+    id: job.id,
+    status: job.status,
     phase: job.phase,
     error: job.error || undefined,
-    chargedCents: Math.round(Number(job.charged || 0) * 100),
-    availableCents: Number.isFinite(cents) ? cents : null,
+    chargedCents: Math.round(job.charged * 100),
+    availableCents: job.availableCents ?? null,
     images: toJobImages(job, prompt, text),
   }
 }
@@ -377,7 +388,7 @@ export async function submitGenerate({ plan, referenceData, referenceImages, ann
   if (names.length && references.length !== sources.length + (referenceData ? 1 : 0)) throw new ApiError(400, '人物参考图不完整，请重新确认')
   const mapping = names.map(name => `${sources.flatMap((source, index) => source.personName === name ? [`第${index + (referenceData ? 2 : 1)}张`] : []).join('、')}为${name}的身份参考`).join('；')
   const identity = names.length ? `\n人物身份参考：${referenceData ? '第一张为用户指定的编辑底图，保留其构图与未要求改动的内容；' : ''}${mapping}。分别综合每位人物的面部轮廓、五官比例和年龄特征，保持各自身份一致，不能混淆或合并人物；公开照片只用于人物身份，不照搬其中的服装、姿势、场景、构图或画面文字，仍按用户画面意图和本方案实现。` : ''
-  const job = await request('generate', {
+  const job = await request<RawImageJob>('generate', {
     method: 'POST',
     body: JSON.stringify({
       prompt: plan.prompt + identity,
@@ -392,20 +403,20 @@ export async function submitGenerate({ plan, referenceData, referenceImages, ann
       requestKey,
     }),
   })
-  return job
+  return imageJobResponseSchema.parse(job)
 }
 
 export async function getJob(id: string, prompt: string, text = ''): Promise<JobState> {
-  return jobStateSchema.parse(toJobState(await request(`jobs/${id}`), prompt, text))
+  return jobStateSchema.parse(toJobState(await request<RawImageJob>(`jobs/${id}`), prompt, text))
 }
 
 export async function findJobByRequestKey(requestKey: string, prompt: string, text = ''): Promise<JobState> {
-  return jobStateSchema.parse(toJobState(await request(`jobs/by-request?requestKey=${encodeURIComponent(requestKey)}`), prompt, text))
+  return jobStateSchema.parse(toJobState(await request<RawImageJob>(`jobs/by-request?requestKey=${encodeURIComponent(requestKey)}`), prompt, text))
 }
 
 export async function loadGallery(): Promise<GalleryRecord[]> {
-  const v = await request('history?limit=100')
-  return (Array.isArray(v.records) ? v.records : []).map((r: any) => ({
+  const v = historyResponseSchema.parse(await request<Wire['History']>('history?limit=100'))
+  return v.records.map(r => ({
     id: String(r.id),
     jobId: String(r.jobId),
     index: Number(r.index),
@@ -422,9 +433,8 @@ export async function removeGalleryImage(jobId: string, index: number) {
 }
 
 export async function loadTemplates(): Promise<Template[]> {
-  const v = await request('templates')
-  const list = Array.isArray(v?.templates) ? v.templates : Array.isArray(v) ? v : []
-  return list.map((t: any, i: number) => ({
+  const v = templatesResponseSchema.parse(await request<Wire['Templates']>('templates'))
+  return v.templates.map((t, i) => ({
     id: String(t.id || i),
     title: String(t.title || '灵感模板'),
     prompt: String(t.prompt || t.description || t.title || '').replace(
@@ -438,29 +448,16 @@ export async function loadTemplates(): Promise<Template[]> {
   }))
 }
 
-export type VideoJob = {
-  id: string
-  status: string
-  phase?: string
-  error?: string
-  availableCents?: number | null
-  chargedCents?: number
-  url?: string
-  duration?: number
-  ratio?: string
-  prompt?: string
-}
+export type VideoJob = Wire['VideoJob']
 
 export async function loadVideos(): Promise<VideoJob[]> {
-  const value = await request<{ records?: VideoJob[] }>('videos')
-  return Array.isArray(value.records) ? value.records : []
+  return videosResponseSchema.parse(await request<Wire['Videos']>('videos')).records
 }
 
 export async function getVideo(id: string): Promise<VideoJob> {
-  return request<VideoJob>(`videos/${encodeURIComponent(id)}`)
+  return videoJobResponseSchema.parse(await request<VideoJob>(`videos/${encodeURIComponent(id)}`))
 }
 
 export async function chatUsage(): Promise<{ used: number; limit: number }> {
-  const v = await request('chat')
-  return { used: Number(v.used) || 0, limit: Number(v.limit) || 50 }
+  return chatUsageResponseSchema.parse(await request<Wire['ChatUsage']>('chat'))
 }

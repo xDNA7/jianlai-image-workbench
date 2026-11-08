@@ -39,6 +39,10 @@ export function ChatApp() {
   const search = new URLSearchParams(typeof window === 'undefined' ? '' : window.location.search).get('view') ?? undefined
   const desktop = useMinWidth(768)
   const [view, setView] = useState<View>(() => initialView(search))
+  const { ensureTemplates, templatesState } = w
+  useEffect(() => {
+    if (view === 'templates' && templatesState === 'idle') void ensureTemplates()
+  }, [view, templatesState, ensureTemplates])
   const [menuOpen, setMenuOpen] = useState(false)
   const [galleryDrawer, setGalleryDrawer] = useState(false)
   const [filter, setFilter] = useState<'all' | 'favorites'>('all')
@@ -51,7 +55,6 @@ export function ChatApp() {
   const show = (to: View) => {
     setView(to)
     setMenuOpen(false)
-    if (to === 'templates') void w.ensureTemplates()
   }
   const pickTemplate = (t: Template) => {
     w.unpin()
@@ -175,7 +178,7 @@ export function ChatApp() {
           ) : view === 'templates' ? (
             <div className="jl-pane-scroll"><TemplatesPane templates={w.templates} mine={w.mine} onRemoveMine={w.removeMine} state={w.templatesState} onRetry={w.ensureTemplates} onPick={pickTemplate} /></div>
           ) : (
-            <div className="jl-pane-scroll"><Suspense fallback={<p className="p-6 text-sm text-muted-foreground">加载中…</p>}><VideoPane balance={w.balance} onBalance={w.refreshBalance} /></Suspense></div>
+            <div className="jl-pane-scroll"><Suspense fallback={<p className="p-6 text-sm text-muted-foreground">加载中…</p>}><VideoPane key={w.boot?.accountId || 'pending'} accountId={w.boot?.accountId || null} balance={w.balance} onBalance={w.refreshBalance} /></Suspense></div>
           )}
         </main>
       </div>

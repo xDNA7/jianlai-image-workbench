@@ -255,6 +255,26 @@ pub async fn handle(
         if path == "/api/chat" && method == "POST" {
             return chat::handle(&a, &account, body(req).await?).await;
         }
+        if path == "/api/videos/by-request" && method == "GET" {
+            let key = url
+                .query_pairs()
+                .find(|(key, _)| key == "requestKey")
+                .map(|(_, value)| value.into_owned())
+                .unwrap_or_default();
+            if !matches(r"^[a-zA-Z0-9-]{16,80}$", &key) {
+                return Err(fail("任务标识无效"));
+            }
+            let db = a.db();
+            let job = db
+                .query_row(
+                    repositories::statements::submissions::SELECT_VIDEO_JOBS_ACCOUNT,
+                    params![account, key],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .ok_or_else(|| Error(404, "任务尚未找到".into()))?;
+            return Ok(reply(200, video_job(&db, &job)?));
+        }
         if path == "/api/videos" && method == "GET" {
             let rows = a.db().prepare(repositories::statements::api::SELECT_VIDEO_JOBS_ACCOUNT_CREATED_CREATED)?
                 .query_map(params![account, now() - 7 * DAY], |r| Ok(json!({"id":r.get::<_,String>(0)?,"status":r.get::<_,String>(1)?,"phase":r.get::<_,String>(2)?,"created":r.get::<_,i64>(3)?,"prompt":r.get::<_,String>(4)?,"duration":r.get::<_,i64>(5)?,"ratio":r.get::<_,String>(6)?,"resolution":r.get::<_,String>(7)?,"url":r.get::<_,Option<String>>(8)?,"error":r.get::<_,Option<String>>(9)?.unwrap_or_default(),"reservedCents":r.get::<_,i64>(10)?,"chargedCents":r.get::<_,i64>(11)?,"providerId":r.get::<_,Option<String>>(12)?,"started":r.get::<_,Option<i64>>(13)?})))?

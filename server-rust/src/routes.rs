@@ -1,7 +1,12 @@
 use crate::*;
 
 pub fn router(app: App) -> Router {
-    Router::new().fallback(dispatch).with_state(app)
+    Router::new()
+        .fallback(dispatch)
+        .with_state(app)
+        .layer(axum::middleware::from_fn(
+            crate::middleware::observe_request,
+        ))
 }
 
 async fn dispatch(

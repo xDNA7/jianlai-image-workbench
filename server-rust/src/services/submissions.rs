@@ -141,7 +141,7 @@ pub async fn video(a: App, account: String, input: Value) -> Result<Response> {
         if let Ok(balance) = balance {
             tokio::spawn(async move {
                 if let Err(error) = pool.set_ledger(balance).await {
-                    eprintln!("postgres_shadow_ledger_sync_failed error={error}");
+                    tracing::error!(code = %crate::middleware::postgres_error_code(&error), "postgres_shadow_ledger_sync_failed");
                 }
             });
         }
@@ -172,7 +172,7 @@ pub async fn video(a: App, account: String, input: Value) -> Result<Response> {
                 )
                 .await
             {
-                eprintln!("postgres_shadow_video_write_failed job={shadow_job} error={error}");
+                tracing::error!(job = %shadow_job, code = %crate::middleware::postgres_error_code(&error), "postgres_shadow_video_write_failed");
             }
         });
     }
@@ -297,7 +297,7 @@ pub async fn image(a: App, account: String, input: Value) -> Result<Response> {
                 )
                 .await
             {
-                eprintln!("postgres_shadow_job_write_failed job={shadow_job} error={error}");
+                tracing::error!(job = %shadow_job, code = %crate::middleware::postgres_error_code(&error), "postgres_shadow_job_write_failed");
             }
         });
     }

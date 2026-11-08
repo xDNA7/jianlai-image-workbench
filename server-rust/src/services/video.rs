@@ -71,7 +71,7 @@ async fn update(
         if let Ok(balance) = balance {
             tokio::spawn(async move {
                 if let Err(error) = pool.set_ledger(balance).await {
-                    eprintln!("postgres_shadow_ledger_sync_failed error={error}");
+                    tracing::error!(code = %crate::middleware::postgres_error_code(&error), "postgres_shadow_ledger_sync_failed");
                 }
             });
         }
@@ -95,7 +95,7 @@ async fn update(
                 )
                 .await
             {
-                eprintln!("postgres_shadow_video_update_failed job={id} error={error_value}");
+                tracing::error!(job = %id, code = %crate::middleware::postgres_error_code(&error_value), "postgres_shadow_video_update_failed");
             }
         });
     }
@@ -532,7 +532,7 @@ pub async fn resume(a: &App) -> Result<()> {
                 })
                 .is_err()
             {
-                eprintln!("video_recovery_queue_closed");
+                tracing::error!("video_recovery_queue_closed");
                 break;
             }
         }
@@ -552,7 +552,7 @@ pub fn cleanup(a: &App) -> Result<()> {
         if let Some(url) = url {
             if let Some(key) = store::oss_key_from_url(a, &url) {
                 if let Err(e) = store::oss_remove(a, &key) {
-                    eprintln!("video_object_cleanup_failed {} {}", id, e.0);
+                    tracing::error!(job = id, code = e.0, "video_object_cleanup_failed");
                     continue;
                 }
             }

@@ -91,7 +91,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["getOriginalImage"];
         put?: never;
         post?: never;
         delete: operations["deleteImage"];
@@ -148,6 +148,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/videos/by-request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getVideoByRequest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/videos/{jobId}": {
         parameters: {
             query?: never;
@@ -164,6 +180,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/by-request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["findImageJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/{adminPath}/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAdminUsers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/{adminPath}/users/{accountId}/images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAdminImages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/{adminPath}/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAdminTemplates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/{adminPath}/recharge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["rechargeBalance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/{adminPath}/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -171,7 +283,20 @@ export interface components {
         Bootstrap: {
             accountId: string;
             availableCents: number | null;
-            capabilities: Record<string, never>;
+            balanceCents?: number;
+            reservedCents?: number;
+            balance?: number;
+            reserved?: number;
+            available?: number;
+            capabilities: components["schemas"]["Capabilities"];
+            imagePriceCents?: number;
+            retentionDays?: number;
+            videoEnabled?: boolean;
+            videoPriceCentsPerSecond?: number;
+            videoMinSeconds?: number;
+            videoMaxSeconds?: number;
+            activeJob?: components["schemas"]["ActiveImageJob"] | null;
+            activeVideo?: components["schemas"]["VideoJob"] | null;
         };
         GenerateRequest: {
             prompt: string;
@@ -179,11 +304,238 @@ export interface components {
             size?: string;
             quality?: string;
             count?: number;
+            text?: string;
+            references?: string[];
+            annotations?: Record<string, never>[];
+            /** @enum {string} */
+            mode?: "reference" | "blend" | "edit";
+            compare?: boolean;
+        };
+        Error: {
+            error: string;
+        };
+        Ok: {
+            ok: boolean;
+        };
+        Health: {
+            ok: boolean;
+            runtime: string;
+            version: string;
+            maintenance: boolean;
+            /** @enum {string} */
+            database: "postgres" | "sqlite";
+        };
+        Option: {
+            value: string;
+            label: string;
+        };
+        Capabilities: {
+            sizes: components["schemas"]["Option"][];
+            qualities: components["schemas"]["Option"][];
+            count?: number;
+            price?: number;
+            editCount?: number;
+            editPrice?: number;
+            unitPrice?: number;
+        };
+        JobImage: {
+            index: number;
+            url: string;
+            previewUrl?: string | null;
+            downloadUrl?: string;
+            type?: string;
+            created?: number;
+            expiresAt?: number;
+        };
+        ImageJob: {
+            id: string;
+            requestKey?: string;
+            /** @enum {string} */
+            status: "running" | "done" | "failed";
+            phase?: string;
+            charged: number;
+            availableCents: number | null;
+            images: components["schemas"]["JobImage"][];
+            error?: string;
+            created?: number;
+            expiresAt?: number;
+            count?: number;
+            prompt?: string;
+            text?: string;
+        };
+        VideoJob: {
+            id: string;
+            /** @enum {string} */
+            status: "queued" | "running" | "done" | "failed";
+            phase?: string;
+            created?: number;
+            prompt?: string;
+            duration?: number;
+            ratio?: string;
+            resolution?: string;
+            url?: string | null;
+            error?: string;
+            reservedCents?: number;
+            chargedCents?: number;
+            providerId?: string | null;
+            progress?: number;
+            estimatedSeconds?: number;
+            elapsedSeconds?: number;
+            availableCents?: number | null;
+            account?: string;
+            started?: number | null;
+        };
+        HistoryRecord: {
+            id: string;
+            jobId: string;
+            index: number;
+            image: string;
+            previewUrl?: string | null;
+            downloadUrl?: string;
+            prompt?: string;
+            text?: string;
+            created: number;
+            expiresAt?: number;
+            size?: string;
+            quality?: string;
+            mode?: string;
+            supportsFaceSwap?: boolean;
+            faceSwapPrompt?: string;
+            annotations?: Record<string, never>[];
+        };
+        History: {
+            records: components["schemas"]["HistoryRecord"][];
+            nextCursor?: string | null;
+            total?: number;
+            retentionDays?: number;
+        };
+        Template: {
+            id: string;
+            title: string;
+            prompt?: string;
+            description?: string;
+            text?: string;
+            size?: string;
+            quality?: string;
+            preview?: string;
+            category?: string;
+            parameterDefaults?: {
+                [key: string]: string;
+            };
+        };
+        Templates: {
+            templates: components["schemas"]["Template"][];
+        };
+        Videos: {
+            records: components["schemas"]["VideoJob"][];
+            retentionDays?: number;
+        };
+        ChatUsage: {
+            used: number;
+            limit: number;
+        };
+        ChatRequest: {
+            messages: {
+                /** @enum {string} */
+                role: "user" | "assistant";
+                content: string;
+            }[];
+            reference?: {
+                prompt: string;
+            };
+        };
+        VideoRequest: {
+            requestKey: string;
+            prompt: string;
+            duration: number;
+            ratio: string;
+            resolution: string;
+            image?: string;
+        };
+        AdminStats: {
+            userCount: number;
+            jobCount: number;
+            imageCount: number;
+            runningCount: number;
+            templateCount: number;
+            totalCharged: number;
+        };
+        AdminSession: {
+            authenticated: boolean;
+            username?: string;
+            csrf?: string;
+            expiresAt?: number;
+            balanceCents?: number;
+            reservedCents?: number;
+            availableCents: number;
+            balance?: number;
+            reserved?: number;
+            available?: number;
+            stats?: components["schemas"]["AdminStats"];
+        };
+        AdminUser: {
+            id: string;
+            created: number | null;
+            lastCreated?: number | null;
+            jobCount: number;
+            totalCharged: number;
+            imageCount: number;
+        };
+        AdminUsers: {
+            users: components["schemas"]["AdminUser"][];
+        };
+        AdminImage: {
+            id: string;
+            jobId: string;
+            index: number;
+            url: string | null;
+            downloadUrl: string | null;
+            created: number;
+            expiresAt: number;
+            prompt: string;
+            text: string;
+            hiddenUser: boolean;
+        };
+        AdminImages: {
+            images: components["schemas"]["AdminImage"][];
+        };
+        Recharge: {
+            duplicate: boolean;
+            availableCents: number;
+            balanceCents?: number;
+            reservedCents?: number;
+            balance?: number;
+            reserved?: number;
+            available?: number;
+            recharge: {
+                id: string;
+                amount: number;
+                amountCents: number;
+                created: number;
+            };
+        };
+        ActiveImageJob: {
+            id: string;
+            requestKey?: string;
+            /** @enum {string} */
+            status: "running" | "done" | "failed";
+            phase?: string;
+            charged?: number;
+            availableCents?: number | null;
+            images?: components["schemas"]["JobImage"][];
+            error?: string;
+            created?: number;
+            expiresAt?: number;
+            count?: number;
+            prompt?: string;
+            text?: string;
         };
     };
     responses: never;
     parameters: {
         JobId: string;
+        /** @description Deployment-specific management route identifier; no concrete value belongs in this document. */
+        AdminPath: string;
     };
     requestBodies: never;
     headers: never;
@@ -205,7 +557,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };
@@ -227,6 +590,15 @@ export interface operations {
                     "application/json": components["schemas"]["Bootstrap"];
                 };
             };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     getChatUsage: {
@@ -243,7 +615,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ChatUsage"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };
@@ -256,7 +639,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": components["schemas"]["ChatRequest"];
             };
         };
         responses: {
@@ -267,6 +650,15 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": unknown;
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };
@@ -289,7 +681,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ImageJob"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };
@@ -309,7 +712,52 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ImageJob"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getOriginalImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                jobId: components["parameters"]["JobId"];
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authorized original image bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                    "image/jpeg": string;
+                    "image/webp": string;
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };
@@ -330,7 +778,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["Ok"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };
@@ -351,7 +810,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["History"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };
@@ -369,7 +839,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["Templates"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };
@@ -387,7 +868,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["Videos"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };
@@ -400,7 +892,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": components["schemas"]["VideoRequest"];
             };
         };
         responses: {
@@ -409,7 +901,49 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["VideoJob"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getVideoByRequest: {
+        parameters: {
+            query: {
+                requestKey: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Existing video task for the current account and request key */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoJob"];
+                };
+            };
+            /** @description No task with this key belongs to the current account */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };
@@ -429,7 +963,217 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["VideoJob"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    findImageJob: {
+        parameters: {
+            query: {
+                requestKey: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recover a job without creating or charging it again */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageJob"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listAdminUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Deployment-specific management route identifier; no concrete value belongs in this document. */
+                adminPath: components["parameters"]["AdminPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authenticated management response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUsers"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listAdminImages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Deployment-specific management route identifier; no concrete value belongs in this document. */
+                adminPath: components["parameters"]["AdminPath"];
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authenticated management response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminImages"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listAdminTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Deployment-specific management route identifier; no concrete value belongs in this document. */
+                adminPath: components["parameters"]["AdminPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authenticated management response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Templates"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    rechargeBalance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Deployment-specific management route identifier; no concrete value belongs in this document. */
+                adminPath: components["parameters"]["AdminPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    requestKey: string;
+                    amount: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Idempotent recharge result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Recharge"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getAdminSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Deployment-specific management route identifier; no concrete value belongs in this document. */
+                adminPath: components["parameters"]["AdminPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authenticated management response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSession"];
+                };
+            };
+            /** @description Existing JSON error response; status varies by authentication, validation, quota and provider failures */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };

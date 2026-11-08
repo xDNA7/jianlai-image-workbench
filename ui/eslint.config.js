@@ -7,7 +7,6 @@ export default ts.config(
   js.configs.recommended,
   ...ts.configs.recommended,
   { files: ['scripts/**/*.mjs'], languageOptions: { globals: { process: 'readonly', console: 'readonly' } } },
-  { files: ['src/main.tsx'], rules: { '@typescript-eslint/ban-ts-comment': 'off' } },
   {
     files: ['**/*.{ts,tsx}'],
     languageOptions: { globals: { console: 'readonly', window: 'readonly', document: 'readonly', navigator: 'readonly', fetch: 'readonly', URL: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', setInterval: 'readonly', clearInterval: 'readonly', process: 'readonly' } },

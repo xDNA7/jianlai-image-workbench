@@ -57,7 +57,7 @@ pub async fn connect_optional(
                     .await,
                     Ok(Ok(_))
                 ) {
-                    eprintln!("postgres_primary_lease_lost exiting=true");
+                    tracing::error!(exiting = true, "postgres_primary_lease_lost");
                     std::process::exit(1);
                 }
             }

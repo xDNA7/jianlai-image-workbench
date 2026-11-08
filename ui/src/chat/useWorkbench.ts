@@ -43,15 +43,11 @@ export function clearJobQueryError<T extends JobItem>(item: T, status: 'running'
 export function useWorkbench() {
   const queryClient = useQueryClient()
   const [items, setItems] = useState<ThreadItem[]>([])
-  const [balance, setBalance] = useState<number | null>(null)
   const [replying, setReplying] = useState(false)
-  const [gallery, setGallery] = useState<GalleryRecord[]>([])
-  const [galleryState, setGalleryState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [favorites, setFavorites] = useState<string[]>(() => loadFavorites(storage()))
-  const [templates, setTemplates] = useState<Template[]>([])
   const [pinned, setPinned] = useState<{ url: string; preview: string; prompt: string; marks: Mark[] } | null>(null)
+  const [templatesRequested, setTemplatesRequested] = useState(false)
   const [mine, setMine] = useState<Template[]>(() => loadPrivateTemplates(storage()))
-  const [templatesState, setTemplatesState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const itemsRef = useRef(items)
   itemsRef.current = items
   const uploads = useRef(new Map<string, string>())
@@ -67,8 +63,10 @@ export function useWorkbench() {
     retry: 1,
   })
   const boot = bootQuery.data ?? null
+  const accountId = boot?.accountId ?? null
+  const balance = boot?.availableCents ?? null
   const usageQuery = useQuery({
-    queryKey: ['chat', 'usage'],
+    queryKey: ['chat', 'usage', accountId],
     queryFn: chatUsage,
     enabled: Boolean(boot),
     initialData: { used: 0, limit: 50 },
@@ -79,32 +77,39 @@ export function useWorkbench() {
   const bootError = bootQuery.error ? messageOf(bootQuery.error, '无法连接服务，请刷新重试') : ''
   const ready = Boolean(boot)
   const galleryQuery = useQuery({
-    queryKey: ['history', 'gallery'],
+    queryKey: ['history', 'gallery', accountId],
     queryFn: loadGallery,
     enabled: ready,
     retry: 1,
   })
   const templatesQuery = useQuery({
-    queryKey: ['templates'],
+    queryKey: ['templates', accountId],
     queryFn: loadTemplates,
-    enabled: false,
+    enabled: ready && templatesRequested,
     retry: 1,
   })
+  const gallery = galleryQuery.data ?? []
+  const galleryState: 'loading' | 'ready' | 'error' = galleryQuery.isError ? 'error' : galleryQuery.data ? 'ready' : 'loading'
+  const templates = templatesQuery.data ?? []
+  const templatesState: 'idle' | 'loading' | 'ready' | 'error' = templatesQuery.isFetching ? 'loading' : templatesQuery.isError ? 'error' : templatesQuery.isSuccess ? 'ready' : 'idle'
+  const setBalance = useCallback((availableCents: number) => {
+    if (!accountId || !Number.isFinite(availableCents)) return
+    // A delayed job response must never change the next account's balance.
+    if (queryClient.getQueryData<typeof boot>(['bootstrap'])?.accountId !== accountId) return
+    void queryClient.cancelQueries({ queryKey: ['bootstrap'] })
+    queryClient.setQueryData<typeof boot>(['bootstrap'], (current) => current?.accountId === accountId
+      ? { ...current, availableCents } : current)
+  }, [accountId, queryClient])
   const patch = useCallback(<T extends ThreadItem>(id: string, fn: (item: T) => T) => {
     setItems((prev) => prev.map((i) => (i.id === id ? fn(i as T) : i)))
   }, [])
   const refreshGallery = useCallback(async () => {
-    try {
-      setGallery(await loadGallery())
-      setGalleryState('ready')
-    } catch {
-      setGalleryState('error')
-    }
-  }, [])
+    if (!accountId) return
+    await queryClient.refetchQueries({ queryKey: ['history', 'gallery', accountId], exact: true })
+  }, [accountId, queryClient])
 
   useEffect(() => {
     if (!boot) return
-    setBalance(boot.availableCents)
     if (loadedAccount.current === boot.accountId) return
     loadedAccount.current = boot.accountId
     const restored = loadThread(boot.accountId, storage())
@@ -149,28 +154,14 @@ export function useWorkbench() {
     }
   }, [ready, boot])
 
-  useEffect(() => {
-    if (!ready) return
-    if (galleryQuery.data) {
-      setGallery(galleryQuery.data)
-      setGalleryState('ready')
-    } else if (galleryQuery.isError) {
-      setGalleryState('error')
-    }
-  }, [ready, galleryQuery.data, galleryQuery.isError])
-
   const ensureTemplates = useCallback(async () => {
-    if (templatesState === 'loading' || templatesState === 'ready') return
-    setTemplatesState('loading')
-    templatesQuery.refetch().then(({ data, error }) => {
-      if (error || !data) {
-        setTemplatesState('error')
-        return
-      }
-      setTemplates(data)
-      setTemplatesState('ready')
-    })
-  }, [templatesState, templatesQuery])
+    if (!templatesRequested) {
+      setTemplatesRequested(true)
+      return
+    }
+    if (!accountId || templatesQuery.isFetching || templatesQuery.isSuccess) return
+    await templatesQuery.refetch()
+  }, [accountId, templatesRequested, templatesQuery])
 
   const toggleFavorite = useCallback((target: FavoriteTarget) => {
     setFavorites((prev) => {
@@ -197,10 +188,13 @@ export function useWorkbench() {
   }, [])
 
   const deleteImage = useCallback(async (record: { jobId: string; index: number }) => {
+    if (!accountId) return
     await removeGalleryImage(record.jobId, record.index)
-    await queryClient.invalidateQueries({ queryKey: ['history', 'gallery'] })
-    setGallery((prev) => prev.filter((r) => !(r.jobId === record.jobId && r.index === record.index)))
-  }, [queryClient])
+    const queryKey = ['history', 'gallery', accountId]
+    await queryClient.cancelQueries({ queryKey, exact: true })
+    queryClient.setQueryData<GalleryRecord[]>(queryKey, (current) => current?.filter((r) => !(r.jobId === record.jobId && r.index === record.index)))
+    await queryClient.invalidateQueries({ queryKey, exact: true })
+  }, [accountId, queryClient])
   const pollJob = useCallback(async (itemId: string, jobId: string, prompt: string, text: string) => {
     if (polling.current.has(jobId)) return
     polling.current.add(jobId)
@@ -222,7 +216,7 @@ export function useWorkbench() {
             patch<JobItem>(itemId, (i) => ({
               ...clearJobQueryError(i, 'done'), images: state.images, chargedCents: state.chargedCents, phase: 'done', error: state.error,
             }))
-            await queryClient.invalidateQueries({ queryKey: ['history', 'gallery'] })
+            await queryClient.invalidateQueries({ queryKey: ['history', 'gallery', accountId], exact: true })
             return
           }
           if (state.status === 'failed') {
@@ -243,7 +237,7 @@ export function useWorkbench() {
     } finally {
       polling.current.delete(jobId)
     }
-  }, [patch, queryClient])
+  }, [accountId, patch, queryClient, setBalance])
 
   const startJob = useCallback(async (plan: Plan, reference?: Reference, previous?: JobItem) => {
     if (submitting.current || itemsRef.current.some(isActiveJob)) return
@@ -375,7 +369,7 @@ export function useWorkbench() {
     } finally {
       submitting.current = false
     }
-  }, [patch, pollJob, startJob])
+  }, [patch, pollJob, setBalance, startJob])
   const send = useCallback(async (text: string, upload?: Upload) => {
     const clean = text.trim()
     if (!clean || replying) return
@@ -407,7 +401,7 @@ export function useWorkbench() {
             : undefined,
         },
         {
-          onMeta: (used, limit) => queryClient.setQueryData(['chat', 'usage'], { used, limit }),
+          onMeta: (used, limit) => queryClient.setQueryData(['chat', 'usage', accountId], { used, limit }),
           onDelta: (delta) => patch<AssistantItem>(replyItem.id, (i) => ({ ...i, text: i.text + delta })),
           onPlan: (plan) => patch<AssistantItem>(replyItem.id, (i) => ({
             ...i,
@@ -421,7 +415,7 @@ export function useWorkbench() {
     } catch (e) {
       const stoppedByUser = e instanceof DOMException && e.name === 'AbortError'
       if (e instanceof ApiError && e.status === 429) {
-        queryClient.setQueryData<{ used: number; limit: number }>(['chat', 'usage'], (current) => ({
+        queryClient.setQueryData<{ used: number; limit: number }>(['chat', 'usage', accountId], (current) => ({
           used: current?.limit ?? usage.limit,
           limit: current?.limit ?? usage.limit,
         }))
@@ -435,7 +429,7 @@ export function useWorkbench() {
         setReplying(false)
       }
     }
-  }, [patch, queryClient, replying, pinned, usage.limit])
+  }, [accountId, patch, queryClient, replying, pinned, usage.limit])
   const stopReplying = useCallback(() => abort.current?.abort(), [])
 
   const updatePlan = useCallback((id: string, next: Plan) => {
@@ -505,8 +499,8 @@ export function useWorkbench() {
 
   const refreshBalance = useCallback((cents?: number | null) => {
     if (typeof cents === 'number' && Number.isFinite(cents)) setBalance(cents)
-    else bootstrap().then((b) => setBalance(b.availableCents)).catch(() => {})
-  }, [])
+    else void queryClient.invalidateQueries({ queryKey: ['bootstrap'], exact: true })
+  }, [queryClient, setBalance])
 
   const busy = items.some(isActiveJob)
   const price = boot?.capabilities.priceCents ?? 30

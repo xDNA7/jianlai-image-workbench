@@ -24,6 +24,8 @@ jobs:
           persist-credentials: false
       - name: Publication guard regression tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: Native release integrity and rollback regression tests
+        run: python3 -m unittest discover -s ops -p 'test_*.py' -v
       - name: Check complete public history and metadata
         shell: bash
         run: |
@@ -60,7 +62,7 @@ jobs:
           bun-version: 1.4.4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: ui/.node-version
       - name: Record runner capacity and test concurrency
         run: |
           python3 - <<'PY'
@@ -74,6 +76,8 @@ jobs:
           node --version
           bun --version
       - run: bun ci
+        working-directory: ui
+      - run: bun run check:toolchain && bun run api:check
         working-directory: ui
       - run: bun run typecheck
         working-directory: ui

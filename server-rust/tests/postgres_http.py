@@ -136,8 +136,8 @@ try:
     PROVIDER=http.server.ThreadingHTTPServer(('127.0.0.1',0),Provider)
     threading.Thread(target=PROVIDER.serve_forever,daemon=True).start()
     port,server=start(0);port2=port
-    env={**os.environ,'JIANLAI_TEST_DATABASE_URL':f'postgresql://{ROLE}:{PASSWORD}@127.0.0.1/{DB}','CARGO_TARGET_DIR':'/tmp/jianlai-pg-target'}
-    subprocess.check_call(['cargo','test','--quiet','--manifest-path',str(ROOT/'server-rust/Cargo.toml'),'postgres_statement_catalog','--','--ignored'],env=env)
+    env={**os.environ,'JIANLAI_TEST_DATABASE_URL':f'postgresql://{ROLE}:{PASSWORD}@127.0.0.1/{DB}','CARGO_TARGET_DIR':os.environ.get('CARGO_TARGET_DIR','/tmp/jianlai-pg-target')}
+    subprocess.check_call(['cargo','test','--locked','--quiet','--manifest-path',str(ROOT/'server-rust/Cargo.toml'),'postgres_statement_catalog','--','--ignored'],env=env)
     check('all repository statements prepare against real PostgreSQL')
     one,c1=bootstrap(port);two,c2=bootstrap(port2)
     assert not list(WORK.glob('data*/state.sqlite'))
@@ -337,6 +337,11 @@ try:
     video={'prompt':'mock video','duration':4,'ratio':'16:9','resolution':'768P','requestKey':'video-local-test-00001'}
     code,v,_=req(port,'/api/videos',video,c1);assert code==202,(code,v)
     duplicate=req(port2,'/api/videos',video,c1);assert duplicate[0]==200 and duplicate[1]['id']==v['id'],duplicate
+    by_request='/api/videos/by-request?requestKey='+video['requestKey']
+    assert req(port2,by_request,cookie=c1)[1]['id']==v['id']
+    assert req(port2,by_request,cookie=c2)[0]==404
+    assert req(port,by_request)[0]==401
+    assert req(port,'/api/videos/by-request?requestKey=invalid',cookie=c1)[0]==400
     assert req(port,'/api/videos',{**video,'prompt':'different'},c1)[0]==409
     assert req(port,'/api/videos/'+v['id'],cookie=c2)[0]==404
     for _ in range(200):
@@ -344,6 +349,9 @@ try:
         if finished['status'] in ('done','failed'):break
         time.sleep(.1)
     assert finished['status']=='done' and finished['chargedCents']==480 and finished['reservedCents']==0,finished
+    restored=req(port2,by_request,cookie=c1)
+    assert restored[0]==200 and restored[1]['id']==v['id'] and restored[1]['status']=='done'
+    assert req(port, '/api/videos/by-request?requestKey=video-missing-test-00001',cookie=c1)[0]==404
     assert psql('SELECT balance FROM shared_ledger')=='49560'
     assert req(port,'/api/videos',cookie=c1)[1]['records'][0]['id']==v['id']
     assert not list(WORK.glob('data*/video-tmp/*.mp4'))

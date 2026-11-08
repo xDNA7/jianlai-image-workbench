@@ -1,4 +1,5 @@
 mod handlers;
+mod middleware;
 mod routes;
 mod services;
 use handlers::admin;
@@ -209,6 +210,7 @@ fn load_env(
 }
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    middleware::init_logging();
     let config = std::env::var("CONFIG_FILE").unwrap_or("/etc/jianlai-studio.env".into());
     let mut env = HashMap::new();
     load_env(std::path::Path::new(&config), &mut env, false)?;
@@ -334,13 +336,13 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             .await?;
     }
     if connected_postgres.is_some() {
-        eprintln!(
-            "postgres_ready mode={}",
-            if database_mode == DatabaseMode::Postgres {
+        tracing::info!(
+            mode = if database_mode == DatabaseMode::Postgres {
                 "primary"
             } else {
                 "shadow"
-            }
+            },
+            "postgres_ready"
         );
     }
     let postgres = (database_mode == DatabaseMode::Sqlite)
@@ -474,21 +476,21 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             loop {
                 interval.tick().await;
                 if let Err(e) = store::expire_queued(&maintenance) {
-                    eprintln!("queue_expiry_failed {}", e.0);
+                    tracing::error!(code = e.0, "queue_expiry_failed");
                 }
                 if now() - last_reconcile >= 60000 {
                     last_reconcile = now();
                     if let Err(e) = store::reconcile(&maintenance, false) {
-                        eprintln!("reconcile_failed {}", e.0);
+                        tracing::error!(code = e.0, "reconcile_failed");
                     }
                 }
                 if now() - last_cleanup >= cleanup_ms {
                     last_cleanup = now();
                     if let Err(e) = store::cleanup(&maintenance) {
-                        eprintln!("cleanup_failed {}", e.0);
+                        tracing::error!(code = e.0, "cleanup_failed");
                     }
                     if let Err(e) = video::cleanup(&maintenance) {
-                        eprintln!("video_cleanup_failed {}", e.0);
+                        tracing::error!(code = e.0, "video_cleanup_failed");
                     }
                 }
             }
@@ -499,7 +501,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .or_else(|| app.env.get("PORT").cloned())
         .unwrap_or("3218".into());
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?;
-    println!("jianlai_ready {} rust", listener.local_addr()?.port());
+    tracing::info!(
+        port = listener.local_addr()?.port(),
+        runtime = "rust",
+        "jianlai_ready"
+    );
     let router = routes::router(app.clone());
     axum::serve(
         listener,

@@ -667,7 +667,7 @@ fn settle(a: &App, job: &str, found: Vec<StoredImage>, error: &str) -> Result<()
         if let Ok(balance) = balance {
             tokio::spawn(async move {
                 if let Err(error) = pool.set_ledger(balance).await {
-                    eprintln!("postgres_shadow_ledger_sync_failed error={error}");
+                    tracing::error!(code = %crate::middleware::postgres_error_code(&error), "postgres_shadow_ledger_sync_failed");
                 }
             });
         }
@@ -729,18 +729,18 @@ pub async fn execute(a: &App, job: &str, p: Value) {
                                     }
                                 }
                                 reason = "图片交付记录保存失败".into();
-                                eprintln!("image_journal_failed {job} {idx}");
+                                tracing::error!(job, index = idx, "image_journal_failed");
                             }
                         }
                     }
                     Err(_) => {
                         reason = "图片保存失败".into();
-                        eprintln!("image_store_failed {job} {idx}");
+                        tracing::error!(job, index = idx, "image_store_failed");
                     }
                 }
             }
         }
-        Err(e) => eprintln!("generation_failed {job} code={}", e.0),
+        Err(e) => tracing::error!(job, code = e.0, "generation_failed"),
     }
     let error = if found.is_empty() {
         "生成未成功，未扣费，请稍后重试".to_owned()
@@ -759,7 +759,7 @@ pub async fn execute(a: &App, job: &str, p: Value) {
         String::new()
     };
     if let Err(e) = settle(a, job, found, &error) {
-        eprintln!("commit_failed {job} {}", e.0); /* Keep reservation for crash recovery; never silently discard published files. */
+        tracing::error!(job, code = e.0, "commit_failed"); /* Keep reservation for crash recovery; never silently discard published files. */
     } else if let Some(pool) = a.postgres.clone() {
         let snapshot = a.db().query_row(
             repositories::statements::images::SELECT_JOBS_ID_5,
@@ -781,7 +781,7 @@ pub async fn execute(a: &App, job: &str, p: Value) {
                     .update_job(&job, &status, &phase, charged, &value)
                     .await
                 {
-                    eprintln!("postgres_shadow_job_update_failed job={job} error={error}");
+                    tracing::error!(job = %job, code = %crate::middleware::postgres_error_code(&error), "postgres_shadow_job_update_failed");
                 }
             });
         }
@@ -908,7 +908,7 @@ pub fn cleanup(a: &App) -> Result<()> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for i in old {
         if let Err(e) = remove_image(a, &i) {
-            eprintln!("cleanup_image_failed {} {}", i.job, e.0);
+            tracing::error!(job = %i.job, code = e.0, "cleanup_image_failed");
         }
     }
     a.db().execute(

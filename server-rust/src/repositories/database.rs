@@ -5,17 +5,24 @@
 use rusqlite::types::{FromSql, ToSql, ToSqlOutput, Value, ValueRef};
 pub use rusqlite::{params, OptionalExtension};
 use sqlx::{Column, Executor, PgPool, Row as SqlxRow, TypeInfo, ValueRef as SqlxValueRef};
-use std::{future::Future, sync::Mutex, time::Duration};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    future::Future,
+    sync::{LazyLock, Mutex},
+    time::Duration,
+};
 type Result<T> = rusqlite::Result<T>;
 
 fn pg_error(e: sqlx::Error) -> rusqlite::Error {
     // Do not print SQL, bind values, URLs, or provider credentials.
-    eprintln!(
-        "postgres_repository_failed code={}",
-        e.as_database_error()
+    tracing::error!(
+        code = e
+            .as_database_error()
             .and_then(|e| e.code())
             .as_deref()
-            .unwrap_or("transport")
+            .unwrap_or("transport"),
+        "postgres_repository_failed"
     );
     rusqlite::Error::InvalidQuery
 }
@@ -403,20 +410,38 @@ fn column(s: &str) -> &str {
         _ => s,
     }
 }
-fn dialect(sql: &str) -> String {
+static COLUMN_TOKENS: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"\b(requestKey|templateId|jobId|assetId|type)\b").unwrap());
+static BOOLEAN_VALUES: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"\b(hidden|deleted|used)\s*=\s*([01])\b").unwrap());
+static INTEGER_SUM: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"COALESCE\(SUM\(([^)]+)\),0\)").unwrap());
+static POSTGRES_STATEMENTS: LazyLock<HashMap<&'static str, String>> = LazyLock::new(|| {
+    crate::repositories::statements::ALL
+        .iter()
+        .map(|&sql| (sql, translate_dialect(sql)))
+        .collect()
+});
+
+fn dialect(sql: &str) -> Cow<'static, str> {
+    // Only the fixed application catalog is cached; arbitrary SQL cannot grow it.
+    match POSTGRES_STATEMENTS.get(sql) {
+        Some(translated) => Cow::Borrowed(translated),
+        None => Cow::Owned(translate_dialect(sql)),
+    }
+}
+
+fn translate_dialect(sql: &str) -> String {
     fn rewrite(s: &str, index: &mut usize) -> String {
-        let tokens = regex::Regex::new(r"\b(requestKey|templateId|jobId|assetId|type)\b").unwrap();
-        let mut out = tokens
+        let mut out = COLUMN_TOKENS
             .replace_all(s, |c: &regex::Captures<'_>| column(&c[0]).to_string())
             .to_string();
-        out = regex::Regex::new(r"\b(hidden|deleted|used)\s*=\s*([01])\b")
-            .unwrap()
+        out = BOOLEAN_VALUES
             .replace_all(&out, |c: &regex::Captures<'_>| {
                 format!("{}={}", &c[1], if &c[2] == "1" { "TRUE" } else { "FALSE" })
             })
             .to_string();
-        out = regex::Regex::new(r"COALESCE\(SUM\(([^)]+)\),0\)")
-            .unwrap()
+        out = INTEGER_SUM
             .replace_all(&out, "COALESCE(SUM($1),0)::bigint")
             .to_string();
         out.chars()
@@ -546,5 +571,32 @@ mod tests {
             "INSERT INTO jobs(id,request_key) VALUES($1,$2) ON CONFLICT DO NOTHING"
         );
         assert_eq!(dialect("SELECT COALESCE(SUM(reserved),0) FROM jobs WHERE status IN ('queued','running')"),"SELECT COALESCE(SUM(reserved),0)::bigint FROM jobs WHERE status IN ('queued','running')");
+    }
+
+    #[test]
+    fn catalog_translations_are_borrowed_and_unknown_statements_are_not_cached() {
+        for &sql in crate::repositories::statements::ALL {
+            let translated = dialect(sql);
+            assert!(matches!(translated, Cow::Borrowed(_)));
+            assert_eq!(translated, translate_dialect(sql));
+        }
+        let cached = POSTGRES_STATEMENTS.len();
+        for id in 0..10 {
+            let sql = format!("SELECT {id},requestKey FROM jobs WHERE id=?");
+            assert!(matches!(dialect(&sql), Cow::Owned(_)));
+        }
+        assert_eq!(POSTGRES_STATEMENTS.len(), cached);
+    }
+
+    #[test]
+    fn placeholders_and_booleans_skip_escaped_sql_literals() {
+        assert_eq!(
+            dialect("SELECT 'it''s ? hidden=0 requestKey',requestKey FROM jobs WHERE id=? AND status='?' AND hidden=1 AND deleted = 0 AND used=1 AND jobId=?"),
+            "SELECT 'it''s ? hidden=0 requestKey',request_key FROM jobs WHERE id=$1 AND status='?' AND hidden=TRUE AND deleted=FALSE AND used=TRUE AND job_id=$2"
+        );
+        assert_eq!(
+            dialect("INSERT OR IGNORE INTO jobs(id,requestKey) VALUES(?,'requestKey ?')"),
+            "INSERT INTO jobs(id,request_key) VALUES($1,'requestKey ?') ON CONFLICT DO NOTHING"
+        );
     }
 }

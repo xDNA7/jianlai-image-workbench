@@ -383,6 +383,14 @@ test('templates and video are reachable and return to chat', async ({ page }, in
   await noOverflow(page)
 })
 
+test('template deep links load the same templates without a menu click', async ({ page }) => {
+  await install(page)
+  await page.goto('/?view=templates', { waitUntil: 'networkidle' })
+  await expect(page.getByRole('button', { name: /纸艺剧场/ })).toBeVisible()
+  await page.getByRole('button', { name: /纸艺剧场/ }).click()
+  await expect(page.getByRole('textbox', { name: '描述你想要的画面' })).toHaveValue('纸艺风格的小剧场')
+})
+
 test('gallery opens on demand and closes accessibly on desktop and mobile', async ({ page }) => {
   await install(page)
   await page.goto('/', { waitUntil: 'networkidle' })
@@ -402,10 +410,12 @@ test('gallery opens on demand and closes accessibly on desktop and mobile', asyn
   await noOverflow(page)
 })
 
-test('legacy workbench stays reachable for rollback', async ({ page }) => {
+test('old workbench links use the single current workbench', async ({ page }) => {
   await install(page)
   await page.goto('/?legacy=1', { waitUntil: 'networkidle' })
-  await expect(page.locator('h1', { hasText: '生图工作台' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '打开画廊' })).toBeVisible()
+  await expect(page.getByRole('textbox', { name: '描述你想要的画面' })).toBeVisible()
+  await expect(page.locator('h1', { hasText: '生图工作台' })).toHaveCount(0)
 })
 
 const LEGACY_URL = `${OSS}old/work-0.png`

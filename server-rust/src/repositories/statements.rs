@@ -155,7 +155,6 @@ pub mod submissions {
         "UPDATE jobs SET status='failed',reserved=0,result=? WHERE id=?";
 }
 
-#[cfg(test)]
 pub const ALL: &[&str] = &[
     main::SELECT_VIDEO_STATE,
     api::HEALTH,

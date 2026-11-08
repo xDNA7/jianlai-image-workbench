@@ -233,7 +233,7 @@ pub async fn handle(
                         )
                         .await
                     {
-                        eprintln!("postgres_shadow_recharge_write_failed error={error}");
+                        tracing::error!(code = %crate::middleware::postgres_error_code(&error), "postgres_shadow_recharge_write_failed");
                     }
                 });
             }

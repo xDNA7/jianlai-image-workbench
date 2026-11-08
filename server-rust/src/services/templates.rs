@@ -840,7 +840,7 @@ pub async fn run_author(a: &App, task: &str, input: &Value, job: &str) {
         .await
         .unwrap_or_else(|_| Err(Error(504, "模板任务超时，未扣费".into())))
     {
-        eprintln!("template_author_failed {task} {}", e.0);
+        tracing::error!(task, code = e.0, "template_author_failed");
         let mut db = a.db();
         if let Ok(tx) = db.transaction() {
             let _ = tx.execute(

@@ -8,12 +8,14 @@
   "scripts": {
     "dev": "react-router dev --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
-    "build": "react-router build && node scripts/export-client.mjs",
+    "build": "bun run check:toolchain && react-router build && node scripts/export-client.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "test": "VITE_APP_BASE=/jianlai/ VITE_PUBLIC_ASSET_BASE=https://public-assets.example/ bun test tests/*.test.ts",
     "test:e2e": "playwright test",
     "api:types": "openapi-typescript ../docs/openapi.yaml -o src/api/generated.ts",
-    "lint": "eslint src app e2e scripts"
+    "lint": "eslint src app e2e scripts",
+    "check:toolchain": "node scripts/check-toolchain.mjs",
+    "api:check": "node scripts/check-api-types.mjs"
   },
   "dependencies": {
     "@react-router/node": "^7.18.5",
@@ -28,7 +30,6 @@
     "react-dom": "^19.3.1",
     "react-hook-form": "^7.91.0",
     "react-router": "^7.9.5",
-    "react-router-dom": "^7.9.5",
     "tailwind-merge": "^3.7.0",
     "zod": "^4.6.7"
   },
@@ -40,7 +41,6 @@
     "@types/node": "^24.0.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.2",
     "eslint": "10.14.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "openapi-typescript": "^7.13.0",
