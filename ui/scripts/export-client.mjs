@@ -3,7 +3,9 @@ import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 
 const source = resolve(import.meta.dirname, '../build/client')
-const target = resolve(import.meta.dirname, process.env.VITE_OUT_DIR || '../../dist/frontend-spa')
+// VITE_OUT_DIR is relative to ui/, just like Vite's build.outDir. Resolving it
+// from scripts/ silently exported browser-test assets to ui/dist instead.
+const target = resolve(import.meta.dirname, '..', process.env.VITE_OUT_DIR || '../dist/frontend-spa')
 
 // Hash the client entry and every emitted asset; this identifies contents, not build time.
 const hash = createHash('sha256')
