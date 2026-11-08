@@ -400,6 +400,9 @@ test('gallery opens on demand and closes accessibly on desktop and mobile', asyn
   await trigger.click()
   await expect(gallery).toBeVisible()
   await expect(gallery.getByRole('heading', { name: '我的作品', exact: true })).toBeVisible()
+  // React Aria focuses the mounted dialog after it becomes visible. Dispatch
+  // keyboard input only once autofocus has moved it off the trigger.
+  await expect.poll(() => gallery.evaluate(element => element.contains(document.activeElement))).toBe(true)
   await page.keyboard.press('Escape')
   await expect(gallery).toBeHidden()
   await expect(trigger).toBeFocused()
