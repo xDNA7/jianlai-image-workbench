@@ -458,6 +458,10 @@ export async function getVideo(id: string): Promise<VideoJob> {
   return videoJobResponseSchema.parse(await request<VideoJob>(`videos/${encodeURIComponent(id)}`))
 }
 
+export async function getVideoByRequest(key: string): Promise<VideoJob> {
+  return videoJobResponseSchema.parse(await request<VideoJob>(`videos/by-request?requestKey=${encodeURIComponent(key)}`))
+}
+
 export async function chatUsage(): Promise<{ used: number; limit: number }> {
   return chatUsageResponseSchema.parse(await request<Wire['ChatUsage']>('chat'))
 }

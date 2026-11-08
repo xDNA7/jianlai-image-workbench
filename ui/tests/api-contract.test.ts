@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { bootstrap, getJob, loadGallery, loadTemplates, loadVideos, request, toJobState } from '../src/chat/api'
+import { bootstrap, getJob, getVideoByRequest, loadGallery, loadTemplates, loadVideos, request, toJobState } from '../src/chat/api'
 import type { components } from '../src/api/generated'
 
 type Wire = components['schemas']
@@ -42,6 +42,15 @@ describe('wire API contract at the client boundary', () => {
     expect((await loadTemplates())[0].prompt).toBe('江南')
     respond({ records: [{ id: rawJob.id, status: 'running', url: null, progress: 10, elapsedSeconds: 20 }] } satisfies Wire['Videos'])
     expect((await loadVideos())[0]).toMatchObject({ status: 'running', url: null, progress: 10 })
+  })
+
+  test('validates video recovery before a response can clear an unknown submission', async () => {
+    respond({ id: 'video-task', status: 'invalid' })
+    await expect(getVideoByRequest('video-recovery-test-00001')).rejects.toThrow()
+    respond({ id: 'video-task', status: 'done', availableCents: null, url: null })
+    expect(await getVideoByRequest('video-recovery-test-00001')).toMatchObject({ status: 'done', availableCents: null })
+    respond({ error: '任务尚未找到' }, 404)
+    await expect(getVideoByRequest('video-recovery-test-00001')).rejects.toMatchObject({ status: 404 })
   })
 
   test('keeps error messages and ignores non-string provider error values', async () => {

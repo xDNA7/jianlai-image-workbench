@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { VideoStudio } from './VideoStudio'
-import { ApiError, getVideo, loadVideos, request, type VideoJob } from './api'
+import { ApiError, getVideo, getVideoByRequest, loadVideos, request, type VideoJob } from './api'
 import { videoFormSchema, type VideoFormValues } from './schemas'
 import { clearPendingVideo, readPendingVideo, videoPayloadHash, writePendingVideo, type PendingVideo, type VideoPayload } from './video-pending'
 
@@ -64,7 +64,7 @@ export default function VideoPane({ accountId, balance, onBalance }: Props) {
   // null is a confirmed 404. Other failures must never authorize a new POST.
   const findPending = useCallback(async (value: PendingVideo) => {
     try {
-      return await request<VideoJob>(`videos/by-request?requestKey=${encodeURIComponent(value.key)}`)
+      return await getVideoByRequest(value.key)
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 404) return null
       throw reason
