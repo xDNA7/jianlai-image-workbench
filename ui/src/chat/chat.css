@@ -1,0 +1,111 @@
+/* Shared semantic tokens for the approved light AI workbench and its portals. */
+.chat-theme:root {
+  --surface-canvas:#f7f7f5; --surface-raised:#fff; --surface-muted:#f0f0ed;
+  --text-primary:#252522; --text-secondary:#696964; --line-default:#e2e2dd;
+  --action-primary:#0969da; --action-primary-hover:#075abf; --focus-ring:#0969da;
+  --gradient-button-primary-default:linear-gradient(#0969da,#0969da);
+  --gradient-button-primary-hover:linear-gradient(#075abf,#075abf);
+  --gradient-button-primary-active:linear-gradient(#064da3,#064da3);
+  --jl-line-control:#8d8d87; --jl-motion-fast:150ms; --jl-motion-default:200ms;
+  --jl-motion-dialog:250ms; --jl-motion-drawer:300ms;
+  --jl-ease-out:cubic-bezier(.23,1,.32,1); --jl-ease-exit:cubic-bezier(.4,0,1,1);
+  --jl-ease-move:cubic-bezier(.4,0,.2,1); --radius:10px;
+}
+.jl-workbench {display:flex; height:100dvh; min-height:0; background:var(--surface-raised); color:var(--text-primary); isolation:isolate}
+.jl-sidebar {width:216px; padding:26px 12px 16px; flex-shrink:0; background:var(--surface-canvas)}
+.jl-main {display:flex; flex-direction:column; min-height:0; min-width:0; flex:1; background:var(--surface-raised)}
+.jl-topbar {display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:72px; padding:12px 28px; flex-shrink:0}
+.jl-topbar-title {display:flex; align-items:center; gap:8px; font-size:1rem; font-weight:600}
+.jl-topbar button {min-height:44px}
+.jl-artwork-count {font-size:.75rem; color:var(--text-secondary); margin-left:5px; font-variant-numeric:tabular-nums}
+.jl-thread-area {min-height:0; flex:1}
+.jl-pane-scroll {min-height:0; flex:1; overflow:auto; padding:24px 0}
+.jl-welcome {height:100%; overflow:auto; display:flex; align-items:center; padding:24px 40px 72px}
+.jl-welcome-inner {width:100%; max-width:744px; margin:auto}
+.jl-welcome-eyebrow {display:block; text-align:center; font-size:.875rem; line-height:1.25rem; color:var(--text-secondary)}
+.jl-welcome h1 {font-size:1.875rem; line-height:2.25rem; font-weight:600; text-align:center; margin:12px 0 0}
+.jl-welcome-intro {text-align:center; color:var(--text-secondary); line-height:1.75rem; margin:14px 0 0}
+.jl-composer-shell {width:100%; max-width:824px; margin:0 auto; display:grid; gap:10px; padding:12px 40px max(16px,env(safe-area-inset-bottom)); flex-shrink:0; background:var(--surface-raised)}
+.jl-welcome .jl-composer-shell {margin-top:32px; padding:0; max-width:none}
+.jl-composer-shell [data-slot=input-group] {border:1px solid var(--jl-line-control); border-radius:22px; box-shadow:0 2px 8px rgb(25 25 20 / 3%); background:var(--surface-raised); padding:6px; opacity:1}
+.jl-composer-shell [data-slot=input-group]:focus-within {border-color:var(--focus-ring); box-shadow:0 0 0 2px rgb(9 105 218 / 8%)}
+.jl-composer-shell textarea {min-height:76px; padding:12px 14px; font-size:1rem; line-height:1.5rem; background:transparent}
+.jl-composer-shell textarea::placeholder {color:var(--text-secondary); opacity:1}
+.jl-composer-shell [data-slot=input-group-addon] {padding:0 6px 6px; gap:10px}
+.jl-composer-shell [data-slot=input-group-addon]>span {font-size:.75rem; color:var(--text-secondary)}
+.jl-composer-shell [data-slot=button] {min-width:44px; min-height:44px; border-radius:50%}
+.jl-composer-caption {font-size:.75rem; line-height:1.25rem; text-align:center; color:var(--text-secondary); margin:0}
+.jl-pin {display:flex; align-items:center; gap:8px; min-height:56px; border-radius:12px; background:var(--surface-canvas); padding:8px 10px; font-size:.875rem; line-height:1.5rem}
+.jl-pin button {min-width:44px; min-height:44px; flex-shrink:0}
+.jl-suggestions {display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px 12px; margin-top:20px}
+.jl-suggestion {min-height:48px; text-align:left; justify-content:flex-start; padding:10px; white-space:normal; font-size:.875rem}
+.jl-suggestion>span {display:flex; align-items:center; justify-content:flex-start; gap:10px; width:100%}
+.jl-suggestion svg {width:18px; height:18px; color:var(--text-secondary); flex-shrink:0}
+.jl-suggestion svg:last-child {margin-left:auto; width:15px; color:var(--text-secondary)}
+.jl-workbench [data-slot=message-scroller-content] {gap:28px; padding:20px 40px 28px; max-width:824px}
+.jl-workbench [data-slot=message-content] {gap:14px}
+.jl-ai-message {flex-direction:column; gap:12px}
+.jl-assistant-identity {display:flex; align-items:center; gap:8px; font-size:.875rem; line-height:1.25rem}
+.jl-assistant-identity strong {font-weight:600}
+.jl-assistant-identity>span {font-size:.75rem; color:var(--text-secondary); margin-left:2px}
+.jl-assistant-text [data-slot=bubble-content] {font-size:1rem; line-height:1.75rem; padding:0; border:0; box-shadow:none}
+.jl-user-bubble {max-width:84%}
+.jl-user-bubble [data-slot=bubble-content] {font-size:1rem; line-height:1.75rem; padding:12px 18px; background:var(--surface-canvas); border:0; border-radius:20px 20px 4px 20px; box-shadow:none}
+.jl-job-message {max-width:100%}
+.jl-workbench [data-slot=button],.chat-theme [role=dialog] [data-slot=button] {min-height:44px; min-width:44px}
+.chat-theme :where(input,textarea,select) {font-size:1rem; line-height:1.5rem}
+.chat-theme :is(button,a,input,textarea,select,summary):focus-visible {outline:2px solid var(--focus-ring); outline-offset:3px}
+.jl-dialog-close {display:grid; place-items:center; width:44px; height:44px; border:1px solid var(--line-default); border-radius:50%; background:var(--surface-raised); color:var(--text-secondary); outline:none}
+.jl-drawer {background:var(--surface-raised); border-inline:1px solid var(--line-default)}
+.jl-drawer :where(*) {touch-action:pan-y pinch-zoom}
+.jl-mark-tool [data-selected] {color:var(--text-primary)}
+.jl-select {border-color:var(--jl-line-control); border-radius:8px; background:var(--surface-raised); min-height:44px}
+.jl-select-menu {border-color:var(--line-default); border-radius:10px; box-shadow:0 8px 28px rgb(29 29 31 / 12%)}
+.jl-select-menu [role=option] {min-height:44px}
+/* React Aria waits for exit transitions and owns focus throughout. */
+.chat-theme .jl-modal-backdrop {transition:opacity var(--jl-motion-dialog) var(--jl-ease-out)}
+.chat-theme .jl-modal-surface {transition:opacity var(--jl-motion-dialog) var(--jl-ease-out)}
+.chat-theme .jl-modal-backdrop:is([data-entering],[data-exiting]) {opacity:0}
+.chat-theme .jl-modal-surface:has(>.jl-drawer) {transition:transform var(--jl-motion-drawer) var(--jl-ease-out)}
+.chat-theme .jl-modal-backdrop:is([data-entering],[data-exiting]) .jl-modal-surface.left-0:has(>.jl-drawer) {transform:translateX(-20px)}
+.chat-theme .jl-modal-backdrop:is([data-entering],[data-exiting]) .jl-modal-surface.right-0:has(>.jl-drawer) {transform:translateX(20px)}
+html[data-jl-hidden=true] :is(.chat-dots span,.chat-skeleton::after,.chat-progress::after) {animation-play-state:paused}
+@media(hover:hover) and (pointer:fine) {
+  .jl-dialog-close:hover {background:var(--surface-muted); color:var(--text-primary)}
+}
+@media(max-width:1023px) {
+  .jl-sidebar {width:190px; padding-inline:8px}
+  .jl-welcome {padding-inline:28px}
+  .jl-composer-shell {padding-inline:28px}
+  .jl-workbench [data-slot=message-scroller-content] {padding-inline:28px}
+}
+@media(max-width:767px) {
+  .jl-topbar {min-height:64px; padding:10px 12px; gap:4px}
+  .jl-topbar-title {gap:3px}
+  .jl-artwork-count {display:none}
+  .jl-welcome {padding:24px 20px 40px}
+  .jl-welcome h1 {font-size:1.5rem; line-height:2rem}
+  .jl-welcome-eyebrow {font-size:.75rem; line-height:1rem}
+  .jl-welcome-intro {font-size:.875rem; line-height:1.5rem; max-width:290px; margin:12px auto 0}
+  .jl-welcome .jl-composer-shell {margin-top:26px}
+  .jl-composer-shell {padding:8px 12px max(12px,env(safe-area-inset-bottom))}
+  .jl-composer-shell textarea {min-height:76px; padding:10px}
+  .jl-composer-caption {padding:0 4px}
+  .jl-suggestions {grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; margin-top:16px}
+  .jl-suggestion {padding:10px 6px; min-height:44px}
+  .jl-suggestion>span {gap:7px}
+  .jl-suggestion svg:last-child {display:none}
+  .jl-workbench [data-slot=message-scroller-content] {padding:12px 18px 24px; gap:24px}
+  .jl-user-bubble {max-width:90%}
+  .jl-user-bubble [data-slot=bubble-content] {padding:10px 14px}
+  .jl-pin {flex-wrap:wrap; gap:6px}
+  .jl-pin>span {min-width:140px}
+}
+@media(max-width:359px) {
+  .jl-welcome {padding-inline:16px}
+  .jl-suggestions {grid-template-columns:1fr}
+}
+@media(prefers-reduced-motion:reduce) {
+  .jl-workbench *,.jl-workbench *::before,.jl-workbench *::after,.jl-drawer *,.jl-drawer *::before,.jl-drawer *::after {animation:none!important; transition:none!important; scroll-behavior:auto!important}
+  .chat-theme .jl-modal-backdrop,.chat-theme .jl-modal-surface {transition:none!important; transform:none!important}
+}

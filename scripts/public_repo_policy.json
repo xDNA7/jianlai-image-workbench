@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "reviewed_binary_sha256": {
+    "cfec773cdc2ea964de8713471c6fd20774bc40617f5567f92efeeccaca6604b0": "Bundled application font; exact-byte exception, font metadata inspected locally.",
+    "3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62": "Bundled application font; exact-byte exception, font metadata inspected locally."
+  },
+  "reviewed_media_sha256": {
+    "15563bf6ec07c815fc05684076ec80e5a12b5277e4c9469944c0eb0c4bc253f8": "2026-11-08: manually reviewed bundled product artwork; metadata checked.",
+    "9e7c85fa721fcee3f471528d8d8d311a10f2e60e50d691e09028f6e22fdacad8": "2026-11-08: manually reviewed bundled product artwork; metadata checked.",
+    "70293f980b2eee295326a35947ff0f911103788294e46499d15f813a2c2675c4": "2026-11-08: manually reviewed bundled product artwork; metadata checked.",
+    "8bc11dae084a6abba0abe9d42d449448bb17f0940ec7fd7d24dd9d8c8fc323eb": "2026-11-08: manually reviewed bundled product artwork; metadata checked.",
+    "cc7e9dd1f937fa33471d7cd2b69473a0326af64f994760765d37dd651d3d142c": "2026-11-08: manually reviewed bundled product artwork; metadata checked.",
+    "720c91cd64da9e88fe409eb00274d4677fe1d52b54af36ce031ee2695111a826": "2026-11-08: manually reviewed bundled product artwork; metadata checked.",
+    "f26dd0047de3ba5276a89ea5c0ca81a9031a284451f2ccd0bff7c12940d2550c": "2026-11-08: manually reviewed bundled product artwork; metadata checked.",
+    "1cdb2bfc2be817deeaa307d2033b4abe64c908d4f3cb44638f6aea1c509cecbf": "2026-11-08: manually reviewed bundled product artwork; metadata checked.",
+    "8d323332bf89d3991d3de0276a5b39401bdacd586a933dfcbf4e991870860fc4": "2026-11-08: reviewed glass mascot PWA icon and exact-size derivatives; no embedded metadata.",
+    "d456b1775d09c113c27d5405e793f25ef83fc72aff887b457584912bbdfeee96": "2026-11-08: reviewed glass mascot PWA icon and exact-size derivatives; no embedded metadata.",
+    "a593062b10a1a483affd3e5b4cf5a829a8486ad4ad864d734c5807e1e3483328": "2026-11-08: reviewed glass mascot PWA icon and exact-size derivatives; no embedded metadata.",
+    "3623a81f6ad41214e5ce3d25f95380f99c90fe7e3514a8c189b23aa96ff12d24": "2026-11-08: reviewed glass mascot PWA icon and exact-size derivatives; no embedded metadata."
+  }
+}

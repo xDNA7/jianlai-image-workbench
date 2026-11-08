@@ -1,0 +1,87 @@
+name: Build Jianlai application
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Check, test, and build static React frontend
+        working-directory: ui
+        run: |
+          bun ci
+          bun run typecheck
+          bun run build
+          bun test tests/build.test.ts tests/chat.test.ts
+          bunx playwright install --with-deps chromium
+          bun run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jianlai-e2e-screenshots
+          path: |
+            ui/test-results/shots/**
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Assemble versioned frontend artifact
+        run: |
+          set -euxo pipefail
+          release="$GITHUB_WORKSPACE/dist/frontend-release"
+          rm -rf "$release"
+          test -f "$GITHUB_WORKSPACE/dist/frontend-spa/index.html"
+          cp -a "$GITHUB_WORKSPACE/dist/frontend-spa/." "$release/"
+          (cd "$release" && find . -type f ! -name SHA256SUMS ! -path '*/.*' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS && sha256sum -c SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jianlai-studio-react-spa
+          path: dist/frontend-release/**
+          if-no-files-found: error
+          retention-days: 14
+
+  backend:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            server-rust -> target
+            rust-core -> target
+      - name: Build SQLite-only Rust service
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: cargo build --manifest-path server-rust/Cargo.toml --release --locked --bin image-workbench-server
+      - name: Check binary ABI and create checksum manifest
+        run: |
+          mkdir -p dist
+          cp server-rust/target/release/image-workbench-server dist/
+          python3 - <<'PY'
+          import re, subprocess
+          out = subprocess.check_output(["readelf", "--version-info", "dist/image-workbench-server"], text=True)
+          versions = [tuple(map(int, x.split("."))) for x in re.findall(r"GLIBC_(\d+\.\d+)", out)]
+          maximum = max(versions)
+          assert maximum <= (2, 36), f"binary requires GLIBC_{'.'.join(map(str, maximum))}"
+          print("maximum required GLIBC:", ".".join(map(str, maximum)))
+          PY
+          (cd dist && sha256sum image-workbench-server > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jianlai-studio-server-linux-amd64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

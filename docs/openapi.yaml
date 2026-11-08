@@ -1,0 +1,90 @@
+openapi: 3.1.0
+info:
+  title: Jianlai Image Workbench API
+  version: 2.0.0-shadow
+  description: >-
+    Verified contract baseline for the existing Rust/Axum service. The PostgreSQL
+    migration must preserve these paths and response semantics.
+servers:
+  - url: /jianlai
+paths:
+  /api/health:
+    get:
+      operationId: getHealth
+      responses:
+        '200': { description: Healthy }
+  /api/bootstrap:
+    get:
+      operationId: getBootstrap
+      responses:
+        '200':
+          description: Account, capabilities and active job
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/Bootstrap' } }
+  /api/chat:
+    get:
+      operationId: getChatUsage
+      responses: { '200': { description: Daily chat usage } }
+    post:
+      operationId: streamChat
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses: { '200': { description: Server-sent events, content: { text/event-stream: {} } } }
+  /api/generate:
+    post:
+      operationId: createImageJob
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/GenerateRequest' } } } }
+      responses: { '200': { description: Created or reused idempotent job } }
+  /api/jobs/{jobId}:
+    get:
+      operationId: getJob
+      parameters: [{ $ref: '#/components/parameters/JobId' }]
+      responses: { '200': { description: Job state } }
+  /api/jobs/{jobId}/images/{index}:
+    delete:
+      operationId: deleteImage
+      parameters:
+        - { $ref: '#/components/parameters/JobId' }
+        - { name: index, in: path, required: true, schema: { type: integer, minimum: 0 } }
+      responses: { '200': { description: Deleted } }
+  /api/history:
+    get:
+      operationId: listHistory
+      parameters: [{ name: limit, in: query, schema: { type: integer, maximum: 100 } }, { name: cursor, in: query, schema: { type: string } }]
+      responses: { '200': { description: Cursor-paginated history } }
+  /api/templates:
+    get:
+      operationId: listTemplates
+      responses: { '200': { description: Public templates } }
+  /api/videos:
+    get:
+      operationId: listVideos
+      responses: { '200': { description: Video jobs } }
+    post:
+      operationId: createVideoJob
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses: { '200': { description: Created or reused video job } }
+  /api/videos/{jobId}:
+    get:
+      operationId: getVideoJob
+      parameters: [{ $ref: '#/components/parameters/JobId' }]
+      responses: { '200': { description: Video job state } }
+components:
+  parameters:
+    JobId: { name: jobId, in: path, required: true, schema: { type: string, pattern: '^[a-f0-9]{32}$' } }
+  schemas:
+    Bootstrap:
+      type: object
+      required: [accountId, availableCents, capabilities]
+      properties:
+        accountId: { type: string }
+        availableCents: { type: [integer, 'null'], minimum: 0 }
+        capabilities: { type: object }
+    GenerateRequest:
+      type: object
+      required: [prompt, requestKey]
+      properties:
+        prompt: { type: string, minLength: 1 }
+        requestKey: { type: string, minLength: 16, maxLength: 100 }
+        size: { type: string }
+        quality: { type: string }
+        count: { type: integer, minimum: 1, maximum: 2 }

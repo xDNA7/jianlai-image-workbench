@@ -1,0 +1,527 @@
+#!/usr/bin/env python3
+"""Real PostgreSQL/HTTP ledger tests; local providers only, no production config."""
+import base64, concurrent.futures, hashlib, http.server, json, os, pathlib, secrets, shutil, socket, struct, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
+ROOT=pathlib.Path(__file__).resolve().parents[2]
+BINARY=pathlib.Path(os.environ.get('JIANLAI_TEST_BINARY','/tmp/jianlai-pg-target/debug/image-workbench-server'))
+DB='jianlai_test_business_'+secrets.token_hex(6)
+ROLE=DB
+PASSWORD=secrets.token_hex(16)
+WORK=pathlib.Path(tempfile.mkdtemp(prefix='jianlai-pg-business-',dir='/tmp'))
+PROCESSES=[]
+LOGS=[]
+
+def psql(sql, database=DB):
+    return subprocess.check_output(['runuser','-u','postgres','--','psql','-X','-qAt','-v','ON_ERROR_STOP=1','-d',database,'-c',sql],text=True,cwd='/tmp').strip()
+def free_port():
+    with socket.socket() as s: s.bind(('127.0.0.1',0)); return s.getsockname()[1]
+def chunk(t,d):return struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
+def png(color=128):return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',8,8,8,2,0,0,0))+chunk(b'IDAT',zlib.compress((b'\0'+bytes([color,64,32])*8)*8))+chunk(b'IEND',b'')
+PNG=png()
+class Provider(http.server.BaseHTTPRequestHandler):
+    active=0
+    image_requests={}
+    peak=0
+    guard=threading.Lock()
+    def log_message(self,*args):pass
+    def do_POST(self):
+        value=json.loads(self.rfile.read(int(self.headers.get('Content-Length','0'))))
+        if self.path.endswith('/images/generations'):
+            time.sleep(.7)
+            if 'FAIL_TEST' in value.get('prompt',''): self.send_response(400);result={'error':{'message':'invalid prompt'}}
+            else:
+                prompt=value.get('prompt','')
+                with Provider.guard:
+                    calls=Provider.image_requests.setdefault(prompt,[]);calls.append(value['n']);attempt=len(calls)
+                scenario=next((name for name in ('SHORT_BATCH_TEST','DUPLICATE_BATCH_TEST','FAIL_FILL_TEST','RATE_FILL_TEST') if name in prompt),None)
+                status=400 if scenario=='FAIL_FILL_TEST' and attempt>1 else 429 if scenario=='RATE_FILL_TEST' and attempt>1 else 200
+                self.send_response(status)
+                if status!=200:result={'error':{'message':'content_policy violation' if status==400 else 'rate limited'}}
+                else:
+                    colors=[128+i for i in range(value['n'])] if not scenario else [128] if attempt==1 or scenario=='DUPLICATE_BATCH_TEST' else [128+attempt+i for i in range(value['n'])]
+                    result={'data':[{'b64_json':base64.b64encode(png(c)).decode()} for c in colors]}
+        elif self.path.endswith('/v2/video_generation'):
+            self.send_response(200);result={'task_id':'mock-video'}
+        elif self.path.endswith('/chat/completions'):
+            self.send_response(200); result={'choices':[{'message':{'content':json.dumps({'title':'测试模板','category':'poster','prompt':'A test poster','tags':[],'parameters':[],'parameterDefaults':{}})}}]}
+        else:self.send_response(404);result={}
+        self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(result).encode())
+    def do_HEAD(self):
+        if self.path.startswith('/local-test/'):
+            self.send_response(200);self.send_header('Content-Type','image/png');self.send_header('Content-Length',str(len(PNG)));self.end_headers();return
+        self.send_response(404);self.end_headers()
+    def do_GET(self):
+        if self.path.startswith('/local-test/expired-'):
+            self.send_response(410);self.end_headers();return
+        if self.path.startswith('/local-test/'):
+            self.send_response(200);self.send_header('Content-Type','image/png');self.end_headers();self.wfile.write(PNG);return
+        if self.path=='/mock.mp4':
+            self.send_response(200);self.send_header('Content-Type','video/mp4');self.end_headers();self.wfile.write(b'\x00\x00\x00\x20ftypisom'+b'\0'*20);return
+        with Provider.guard:
+            Provider.active+=1;Provider.peak=max(Provider.peak,Provider.active)
+        time.sleep(.15)
+        self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
+        self.wfile.write(json.dumps({'status':'succeeded','content':{'url':f'http://127.0.0.1:{self.server.server_port}/mock.mp4'}}).encode())
+        with Provider.guard:Provider.active-=1
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self,*args):return None
+OPENER=urllib.request.build_opener(NoRedirect)
+def req(port,path,body=None,cookie='',csrf=None,method=None):
+    headers={'Origin':f'http://127.0.0.1:{port}','Cookie':cookie}
+    if body is not None:headers['Content-Type']='application/json'
+    if csrf:headers['X-CSRF-Token']=csrf
+    r=urllib.request.Request(f'http://127.0.0.1:{port}/jianlai'+path,data=None if body is None else json.dumps(body).encode(),headers=headers,method=method)
+    try:res=OPENER.open(r,timeout=30)
+    except urllib.error.HTTPError as e:res=e
+    data=res.read()
+    return res.status, json.loads(data) if data and res.headers.get('Content-Type','').startswith('application/json') else data, res.headers
+
+def start(index,maintenance=False,mode="postgres"):
+    data=WORK/f'data{index}';data.mkdir(exist_ok=True)
+    port=free_port();config=WORK/f'config{index}.env'
+    salt='temporary-local-test-salt';digest=hashlib.scrypt(b'test-password',salt=salt.encode(),n=16384,r=8,p=1,dklen=64,maxmem=64*1024*1024).hex()
+    config.write_text(f'''DATABASE_MODE=postgres
+MAINTENANCE_MODE={int(maintenance)}
+DATABASE_URL=postgresql://{ROLE}:{PASSWORD}@127.0.0.1/{DB}
+PORT={port}
+IMAGE_API_KEY=local-test-only
+IMAGE_API_BASE=http://127.0.0.1:{PROVIDER.server_port}/v1
+IMAGE_MODELS=gpt-image-2
+VIDEO_API_KEY=local-test-only
+VIDEO_API_BASE=http://127.0.0.1:{PROVIDER.server_port}
+VISION_API_KEY=local-test-only
+VISION_API_BASE=http://127.0.0.1:{PROVIDER.server_port}/v1
+VISION_MODEL=local-test
+OSS_PUBLIC_BUCKET=mock-bucket
+OSS_PUBLIC_BASE=http://127.0.0.1:{PROVIDER.server_port}
+OSS_PUBLIC_PREFIX=local-test
+OSSUTIL_BIN={WORK}/oss-mock
+ADMIN_PATH=local_test_admin_path_123456
+ADMIN_USERNAME=test-admin
+ADMIN_PASSWORD_SALT={salt}
+ADMIN_PASSWORD_HASH={digest}
+CLEANUP_INTERVAL_MS=3600000
+''')
+    if mode=='sqlite':
+        # Exercise the actual default: no DATABASE_MODE and no DATABASE_URL.
+        config.write_text('\n'.join(line for line in config.read_text().splitlines() if not line.startswith(('DATABASE_MODE=','DATABASE_URL='))))
+    log=open(WORK/f'server{index}.log','ab');LOGS.append(log)
+    env={**os.environ,'DATA_DIR':str(data),'APP_ROOT':str(ROOT/'app'),'CONFIG_FILE':str(config),'VISION_CONFIG_FILE':str(WORK/'absent'),'IMAGE_FALLBACK_CONFIG_FILE':''}
+    env.pop('PORT',None)
+    p=subprocess.Popen([str(BINARY)],env=env,stdout=log,stderr=log);PROCESSES.append(p)
+    for _ in range(100):
+        try:
+            if req(port,'/api/health')[0]==200:return port,p
+        except (OSError,urllib.error.URLError):pass
+        if p.poll() is not None:raise AssertionError(f'server startup failed ({p.returncode})')
+        time.sleep(.1)
+    raise AssertionError('server startup timeout')
+def bootstrap(port):
+    code,data,h=req(port,'/api/bootstrap');assert code==200,(code,data)
+    return data,h['Set-Cookie'].split(';')[0]
+def payload(key=None,prompt='test image'):
+    return dict(mode='reference',prompt=prompt,text='',size='1024x1024',quality='auto',compare=False,references=[],requestKey=key or secrets.token_hex(16))
+def complete(port,job,cookie):
+    for _ in range(200):
+        code,data,_=req(port,'/api/jobs/'+job,cookie=cookie)
+        assert code==200,(code,data)
+        if data['status'] in ('done','failed'):return data
+        time.sleep(.1)
+    raise AssertionError('generation did not finish')
+def check(name):print(name+' passed',flush=True)
+try:
+    assert BINARY.is_file(),BINARY
+    psql(f'CREATE ROLE {ROLE} LOGIN PASSWORD \'{PASSWORD}\'',database='postgres')
+    subprocess.check_call(['runuser','-u','postgres','--','createdb','-O',ROLE,DB],cwd='/tmp')
+    (WORK/'oss-mock').write_text('#!/bin/sh\nif [ -e "'+str(WORK/'slow-oss')+'" ]; then sleep 0.5; fi\nexit 0\n');(WORK/'oss-mock').chmod(0o700)
+    PROVIDER=http.server.ThreadingHTTPServer(('127.0.0.1',0),Provider)
+    threading.Thread(target=PROVIDER.serve_forever,daemon=True).start()
+    port,server=start(0);port2=port
+    env={**os.environ,'JIANLAI_TEST_DATABASE_URL':f'postgresql://{ROLE}:{PASSWORD}@127.0.0.1/{DB}','CARGO_TARGET_DIR':'/tmp/jianlai-pg-target'}
+    subprocess.check_call(['cargo','test','--quiet','--manifest-path',str(ROOT/'server-rust/Cargo.toml'),'postgres_statement_catalog','--','--ignored'],env=env)
+    check('all repository statements prepare against real PostgreSQL')
+    one,c1=bootstrap(port);two,c2=bootstrap(port2)
+    assert not list(WORK.glob('data*/state.sqlite'))
+    check('postgres starts without SQLite and bootstrap persists account')
+    sql_null_job='d'*32;json_null_job='c'*32
+    psql(f"INSERT INTO jobs(id,account,request_key,status,params,result,created) VALUES('{sql_null_job}','{one['accountId']}','legacy-sql-null-00001','done',NULL,NULL,0),('{json_null_job}','{one['accountId']}','legacy-json-null-0001','done','null'::jsonb,'null'::jsonb,0)")
+    assert req(port,'/api/jobs/'+sql_null_job,cookie=c1)[0]==200
+    assert req(port,'/api/jobs/'+json_null_job,cookie=c1)[0]==200
+    assert psql(f"SELECT params IS NULL AND result IS NULL FROM jobs WHERE id='{sql_null_job}'")=='t'
+    assert psql(f"SELECT params='null'::jsonb AND result='null'::jsonb FROM jobs WHERE id='{json_null_job}'")=='t'
+    check('legacy SQL NULL and JSON literal null remain distinct through reads')
+
+    p=payload();code,j,_=req(port,'/api/generate',p,c1);assert code==202,(code,j)
+    assert j['requestKey']==p['requestKey'],j
+    request_lookup='/api/jobs/by-request?requestKey='+p['requestKey']
+    recovered=req(port,request_lookup,cookie=c1);assert recovered[0]==200 and recovered[1]['id']==j['id'],recovered
+    assert req(port,request_lookup,cookie=c2)[0]==404
+    assert req(port,request_lookup)[0]==401
+    assert req(port,'/api/jobs/by-request?requestKey=bad',cookie=c1)[0]==400
+    assert req(port,'/api/jobs/by-request?requestKey=absent-original-key-00001',cookie=c1)[0]==404
+    check('read-only original-key recovery returns only the owning account job without generation or charging')
+    dup=req(port2,'/api/generate',p,c1);assert dup[0]==200 and dup[1]['id']==j['id'],dup
+    conflict=req(port2,'/api/generate',{**p,'prompt':'different'},c1);assert conflict[0]==409,conflict
+    assert req(port,'/api/generate',payload(),c1)[0]==409
+    assert req(port,'/api/jobs/'+j['id'],cookie=c2)[0]==404
+    done=complete(port,j['id'],c1);assert done['status']=='done' and done['charged']==.3,done
+    assert int(psql('SELECT balance FROM shared_ledger'))==49970
+    assert int(psql('SELECT COUNT(*) FROM stored_images'))==1
+    check('generate + cross-request requestKey idempotency/fingerprint/account isolation + exact billing')
+    # Starting another data directory against a running job must fail before
+    # migrations or recovery can mutate the first process's reservations.
+    pslow=payload(prompt='single process lease test')
+    (WORK/'slow-oss').touch()
+    code,slow,_=req(port,'/api/generate',pslow,c1);assert code==202,(code,slow)
+    before=psql(f"SELECT status||'|'||reserved||'|'||charged FROM jobs WHERE id='{slow['id']}'")
+    config=WORK/'config0.env';second_data=WORK/'rejected-second';second_data.mkdir()
+    second_env={**os.environ,'DATA_DIR':str(second_data),'APP_ROOT':str(ROOT/'app'),'CONFIG_FILE':str(config),'VISION_CONFIG_FILE':str(WORK/'absent'),'IMAGE_FALLBACK_CONFIG_FILE':''}
+    second=subprocess.run([str(BINARY)],env=second_env,capture_output=True,timeout=12)
+    assert second.returncode!=0,second.stdout
+    # Original keeps processing, and a rejected process cannot prematurely
+    # fail/refund it. The only allowed change is its normal completion.
+    row=psql(f"SELECT status||'|'||reserved||'|'||charged FROM jobs WHERE id='{slow['id']}'")
+    assert row in ('running|30|0','done|0|30'),row
+    assert complete(port,slow['id'],c1)['charged']==.3
+    (WORK/'slow-oss').unlink()
+    psql('UPDATE shared_ledger SET balance=49970')
+    check('second primary refuses startup during running work; first bills normally')
+
+    psql(f"UPDATE stored_images SET hidden=TRUE WHERE job='{slow['id']}'")
+    history=req(port,'/api/history',cookie=c1);assert history[0]==200 and history[1]['total']==1,history
+    psql(f"INSERT INTO stored_images(job,idx,account,file,mime,created,object_url) VALUES('{sql_null_job}',0,'{one['accountId']}','legacy-null','image/png',{int(time.time()*1000)},'http://127.0.0.1:{PROVIDER.server_port}/local-test/legacy.png')")
+    assert req(port,'/api/history',cookie=c1)[0]==200
+    assert psql(f"SELECT params IS NULL AND result IS NULL FROM jobs WHERE id='{sql_null_job}'")=='t'
+    image=f"/api/jobs/{j['id']}/images/0"
+    code,original,headers=req(port,image,cookie=c1)
+    assert code==200 and original==PNG,(code,headers)
+    assert headers['Content-Type']=='image/png' and headers['Cache-Control']=='private, no-store'
+    head=req(port,image,cookie=c1,method='HEAD')
+    assert head[0]==200 and int(head[2]['Content-Length'])==len(original) and head[1]==b''
+    assert req(port,image)[0]==401
+    for method in ('GET','HEAD'):
+        assert req(port,image,cookie=c2,method=method)[0]==404
+    psql(f"UPDATE stored_images SET deleted=TRUE WHERE job='{j['id']}'")
+    for method in ('GET','HEAD'):
+        assert req(port,image,cookie=c1,method=method)[0]==404
+    psql(f"UPDATE stored_images SET deleted=FALSE WHERE job='{j['id']}'")
+    assert req(port,image,{},c1,method='DELETE')[0]==200
+    for method in ('GET','HEAD'):
+        assert req(port,image,cookie=c1,method=method)[0]==404
+    day=86400000
+    for age in (8,13,14,15):
+        created=int(time.time()*1000)-age*day
+        psql(f"UPDATE stored_images SET hidden=FALSE,created={created} WHERE job='{j['id']}'; UPDATE jobs SET created={created} WHERE id='{j['id']}'")
+        visible=age<14
+        for method in ('GET','HEAD'):
+            response=req(port,image,cookie=c1,method=method)
+            assert response[0]==(200 if visible else 404),(age,method,response[0])
+            if visible and method=='GET':
+                # The reference/edit flow fetches these original bytes and
+                # turns them into a data URL; no separate source-image API.
+                assert response[1]==PNG and response[2]['Content-Type']=='image/png'
+            assert req(port,image,cookie=c2,method=method)[0]==404
+        code,history,_=req(port,'/api/history',cookie=c1)
+        assert code==200 and history['retentionDays']==14,(code,history)
+        records=[r for r in history['records'] if r['jobId']==j['id']]
+        assert len(records)==int(visible),(age,records)
+        if visible:assert records[0]['expiresAt']==created+14*day
+        code,public,_=req(port,'/api/jobs/'+j['id'],cookie=c1)
+        assert code==200 and public['expiresAt']==created+14*day,(age,public)
+        assert len(public['images'])==int(visible),(age,public)
+        if visible:assert public['images'][0]['expiresAt']==created+14*day
+    check('original/reference bytes and HEAD, account/hidden/deleted isolation, 8/13-day visibility and 14/15-day expiry across history/public job')
+    code,login,h=req(port,'/api/admin/local_test_admin_path_123456/login',{'username':'test-admin','password':'test-password'});assert code==200,(code,login)
+    admin=h['Set-Cookie'].split(';')[0];csrf=login['csrf']
+    code,users,_=req(port,'/api/admin/local_test_admin_path_123456/users',cookie=admin)
+    assert code==200,(code,users)
+    owner=next(u for u in users['users'] if u['id']==one['accountId'])
+    visitor=next(u for u in users['users'] if u['id']==two['accountId'])
+    assert owner['jobCount']>0 and owner['imageCount']>0 and isinstance(owner['lastCreated'],int),owner
+    assert visitor['jobCount']==0 and visitor['imageCount']==0 and visitor['lastCreated'] is None,visitor
+    check('administrator users includes a visitor with nullable lastCreated and an owner with works')
+    # Directory activity must reflect retained artwork, not newer failed jobs.
+    timestamp=int(time.time()*1000)
+    cases=[
+        ('recent',timestamp-10000,timestamp-10000,False,True),
+        ('older-newer-job',timestamp-1000,timestamp-50000,False,False),
+        ('failed-only',timestamp,None,False,False),
+        ('deleted-only',timestamp-1000,timestamp-1000,True,False),
+        ('expired-only',timestamp-31*day,timestamp-31*day,False,False),
+        ('same-time',timestamp-10000,timestamp-10000,False,False),
+    ]
+    fixtures={}
+    for index,(label,job_time,image_time,deleted,hidden) in enumerate(cases):
+        account='9'*28+f'{index:04x}';job='8'*28+f'{index:04x}'
+        fixtures[label]=(account,job,image_time)
+        psql(f"INSERT INTO accounts(id) VALUES('{account}'); INSERT INTO jobs(id,account,request_key,status,created) VALUES('{job}','{account}','directory-sort-{index:04d}','{'failed' if image_time is None else 'done'}',{job_time})")
+        if image_time is not None:
+            psql(f"INSERT INTO stored_images(job,idx,account,file,mime,created,deleted,hidden) VALUES('{job}',0,'{account}','sort-fixture','image/png',{image_time},{str(deleted).upper()},{str(hidden).upper()})")
+    code,ordered,_=req(port,'/api/admin/local_test_admin_path_123456/users',cookie=admin)
+    assert code==200,(code,ordered)
+    ordered=ordered['users']
+    assert ordered==sorted(ordered,key=lambda u:(u['lastCreated'] is None,-(u['lastCreated'] or 0),u['id'])),ordered
+    for label,(account,job,image_time) in fixtures.items():
+        row=next(u for u in ordered if u['id']==account)
+        retained=label in ('recent','older-newer-job','same-time')
+        assert row['imageCount']==int(retained),(label,row)
+        assert row['lastCreated']==(image_time if retained else None),(label,row)
+    assert next(i for i,u in enumerate(ordered) if u['id']==fixtures['recent'][0])<next(i for i,u in enumerate(ordered) if u['id']==fixtures['older-newer-job'][0])
+    for account,job,_ in fixtures.values():
+        psql(f"DELETE FROM stored_images WHERE job='{job}'; DELETE FROM jobs WHERE id='{job}'; DELETE FROM accounts WHERE id='{account}'")
+    check('admin directory sorts retained artwork newest first, empty/null last, stable ties; newer failed jobs/deleted/expired images do not win and hidden artwork remains included')
+    assert req(port,'/api/admin/local_test_admin_path_123456/recharge',{'amount':'1.00','requestKey':'test-recharge-00001'},admin)[0]==403
+    amount={'amount':'1.00','requestKey':'test-recharge-00001'}
+    assert req(port,'/api/admin/local_test_admin_path_123456/recharge',amount,admin,csrf)[0]==200
+    assert req(port2,'/api/admin/local_test_admin_path_123456/recharge',amount,admin,csrf)[0]==200
+    assert int(psql('SELECT balance FROM shared_ledger'))==50070
+    assert req(port,'/api/admin/local_test_admin_path_123456/recharge',{**amount,'amount':'2.00'},admin,csrf)[0]==409
+    check('administrator login/session/CSRF + cross-request recharge idempotency')
+    prefix='/api/admin/local_test_admin_path_123456'
+    code,works,_=req(port,prefix+'/users/'+one['accountId']+'/images',cookie=admin)
+    assert code==200 and any(i['jobId']==j['id'] for i in works['images']),(code,works)
+    assert req(port,prefix+'/users/'+two['accountId']+'/images',cookie=admin)[1]['images']==[]
+    assert psql(f"SELECT params IS NULL AND result IS NULL FROM jobs WHERE id='{sql_null_job}'")=='t'
+    check('nullable legacy metadata renders user/admin history without rewriting SQL NULL')
+
+    for age in (8,13,14,15,29,30,31):
+        created=int(time.time()*1000)-age*day
+        psql(f"UPDATE stored_images SET created={created} WHERE job='{j['id']}'")
+        code,works,_=req(port,prefix+'/users/'+one['accountId']+'/images',cookie=admin)
+        assert code==200,(code,works)
+        records=[i for i in works['images'] if i['jobId']==j['id']]
+        assert len(records)==int(age<30),(age,records)
+        if records:
+            assert records[0]['expiresAt']==created+30*day,(age,records)
+            assert records[0]['hiddenUser']==(age>=14),(age,records)
+        code,original,_=req(port,prefix+f"/images/{j['id']}/0",cookie=admin)
+        assert code==(200 if age<30 else 404),(age,code)
+        if age<30:assert original==PNG
+    check('administrator works/original reads retain images for 30 days; hiddenUser starts at 14 days')
+    # A dead preview must not hide a retained readable original; if both remote
+    # objects fail, use the retained local file without bypassing admin auth.
+    psql(f"UPDATE stored_images SET created={int(time.time()*1000)},preview_url='http://127.0.0.1:{PROVIDER.server_port}/local-test/expired-preview',object_url='http://127.0.0.1:{PROVIDER.server_port}/local-test/readable-original' WHERE job='{j['id']}'")
+    image_path=prefix+f"/images/{j['id']}/0"
+    assert req(port,image_path)[0]==401
+    assert req(port,image_path,cookie=admin)[1]==PNG
+    local_image=WORK/'data0'/'results'/psql(f"SELECT file FROM stored_images WHERE job='{j['id']}' AND idx=0")
+    local_image.parent.mkdir(parents=True,exist_ok=True);local_image.write_bytes(PNG)
+    psql(f"UPDATE stored_images SET object_url='http://127.0.0.1:{PROVIDER.server_port}/local-test/expired-original' WHERE job='{j['id']}'")
+    assert req(port,image_path,cookie=admin)[1]==PNG
+    psql(f"UPDATE stored_images SET preview_url=NULL,object_url=NULL WHERE job='{j['id']}'")
+    check('admin expired preview falls back to original then retained local bytes; unauthenticated reads remain denied')
+
+    # Generated templates stay in review until explicitly saved. Upload mode
+    # auto-saves a reusable template without charging for image generation.
+    author={'mode':'generate','prompt':'test poster','requestKey':'author-local-test-00001'}
+    code,task,_=req(port,prefix+'/templates/author',author,admin,csrf);assert code==202,(code,task)
+    duplicate=req(port2,prefix+'/templates/author',author,admin,csrf);assert duplicate[0]==200 and duplicate[1]['id']==task['id'],duplicate
+    assert req(port,prefix+'/templates/author',{**author,'prompt':'different'},admin,csrf)[0]==409
+    for _ in range(100):
+        code,draft,_=req(port,prefix+'/templates/author/'+task['id'],cookie=admin)
+        if draft['status'] in ('done','failed'):break
+        time.sleep(.1)
+    assert draft['status']=='done' and draft['charged']==.3 and not draft['saved'],draft
+    assert req(port,prefix+'/templates',{'template':draft['template']},admin,csrf)[0]==200
+    assert req(port,prefix+'/templates/author/'+task['id'],cookie=admin)[1]['saved']
+    upload={'mode':'upload','image':'data:image/png;base64,'+base64.b64encode(PNG).decode(),'requestKey':'author-local-upload-00001'}
+    code,task2,_=req(port,prefix+'/templates/author',upload,admin,csrf);assert code==202,(code,task2)
+    for _ in range(100):
+        code,uploaded,_=req(port,prefix+'/templates/author/'+task2['id'],cookie=admin)
+        if uploaded['status'] in ('done','failed'):break
+        time.sleep(.1)
+    assert uploaded['status']=='done' and uploaded['saved'] and uploaded['charged']==0,uploaded
+    assert req(port,prefix+'/templates/'+draft['template']['id'],{},admin,csrf,method='DELETE')[0]==200
+    assert req(port,prefix+'/templates/author/'+task['id'],cookie=admin)[1]['deleted']
+    assert psql('SELECT balance FROM shared_ledger')=='50040'
+    check('template author task, generated review/save/delete and free upload auto-save')
+    video={'prompt':'mock video','duration':4,'ratio':'16:9','resolution':'768P','requestKey':'video-local-test-00001'}
+    code,v,_=req(port,'/api/videos',video,c1);assert code==202,(code,v)
+    duplicate=req(port2,'/api/videos',video,c1);assert duplicate[0]==200 and duplicate[1]['id']==v['id'],duplicate
+    assert req(port,'/api/videos',{**video,'prompt':'different'},c1)[0]==409
+    assert req(port,'/api/videos/'+v['id'],cookie=c2)[0]==404
+    for _ in range(200):
+        code,finished,_=req(port,'/api/videos/'+v['id'],cookie=c1)
+        if finished['status'] in ('done','failed'):break
+        time.sleep(.1)
+    assert finished['status']=='done' and finished['chargedCents']==480 and finished['reservedCents']==0,finished
+    assert psql('SELECT balance FROM shared_ledger')=='49560'
+    assert req(port,'/api/videos',cookie=c1)[1]['records'][0]['id']==v['id']
+    assert not list(WORK.glob('data*/video-tmp/*.mp4'))
+    check('video provider/mock OSS full success, idempotency, isolation and exact billing')
+    psql('UPDATE shared_ledger SET balance=50070')
+
+    fail=req(port,'/api/generate',payload(prompt='FAIL_TEST'),c1);assert fail[0]==202,fail
+    failed=complete(port,fail[1]['id'],c1);assert failed['status']=='failed' and failed['charged']==0,failed
+    assert int(psql('SELECT balance FROM shared_ledger'))==50070
+    assert int(psql("SELECT COALESCE(SUM(reserved),0) FROM jobs WHERE status IN ('running','queued')"))==0
+    check('provider rejection releases reservation without charging')
+    for scenario,expected_count,reason in [('SHORT_BATCH_TEST',2,''),('DUPLICATE_BATCH_TEST',1,'重复'),('FAIL_FILL_TEST',1,'400'),('RATE_FILL_TEST',1,'429')]:
+        before=int(psql('SELECT balance FROM shared_ledger'))
+        batch={**payload(prompt=scenario),'compare':True}
+        accepted=req(port,'/api/generate',batch,c1);assert accepted[0]==202,accepted
+        finished=complete(port,accepted[1]['id'],c1)
+        assert finished['status']=='done' and len(finished['images'])==expected_count and finished['charged']==expected_count*.3,finished
+        assert finished['count']==2 and (reason in finished['error'] if reason else not finished['error']),finished
+        assert psql(f"SELECT reserved::text||'|'||charged::text FROM jobs WHERE id='{finished['id']}'")==f'0|{expected_count*30}'
+        assert int(psql('SELECT balance FROM shared_ledger'))==before-expected_count*30
+        calls=[values for prompt,values in Provider.image_requests.items() if scenario in prompt]
+        assert calls==[[2,1]],calls
+        duplicate=req(port,'/api/generate',batch,c1)
+        assert duplicate[0]==200 and duplicate[1]['id']==finished['id'],duplicate
+        assert [values for prompt,values in Provider.image_requests.items() if scenario in prompt]==[[2,1]]
+        assert int(psql(f"SELECT count(*) FROM stored_images WHERE job='{finished['id']}'"))==expected_count
+    psql('UPDATE shared_ledger SET balance=50070')
+    check('F06 short batch fills only missing output; duplicate/rejection/429 retain partial delivery with exact idempotent billing')
+    (WORK/'slow-oss').touch()
+    hidden_job=req(port,'/api/generate',{**payload(),'compare':True},c1);assert hidden_job[0]==202,hidden_job
+    for _ in range(100):
+        partial=req(port,'/api/jobs/'+hidden_job[1]['id'],cookie=c1)[1]
+        if partial['status']=='running' and len(partial.get('images',[]))==1:break
+        time.sleep(.05)
+    assert partial['status']=='running' and len(partial.get('images',[]))==1,partial
+    assert req(port,f"/api/jobs/{hidden_job[1]['id']}/images/0",{},c1,method='DELETE')[0]==200
+    settled=complete(port,hidden_job[1]['id'],c1)
+    assert settled['status']=='done' and settled['charged']==.6,settled
+    assert psql(f"SELECT hidden::text||'|'||deleted::text FROM stored_images WHERE job='{hidden_job[1]['id']}' AND idx=0")=='true|false'
+    assert psql('SELECT balance FROM shared_ledger')=='50010'
+    (WORK/'slow-oss').unlink()
+    psql('UPDATE shared_ledger SET balance=50070')
+    check('hiding a journaled image during generation preserves hidden flag and full delivery charge')
+
+    # Eight accounts and four units available. The global row
+    # lock must prevent overspending while independent PostgreSQL transactions also contend on the ledger.
+    identities=[bootstrap(port if i%2==0 else port2)[1] for i in range(8)]
+    psql('UPDATE shared_ledger SET balance=120')
+    blocker=subprocess.Popen(['runuser','-u','postgres','--','psql','-X','-qAt','-v','ON_ERROR_STOP=1','-d',DB,'-c','BEGIN;SELECT balance FROM shared_ledger WHERE id=1 FOR UPDATE;SELECT pg_sleep(1);COMMIT'],cwd='/tmp',stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    for _ in range(50):
+        if int(psql("SELECT COUNT(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event='PgSleep'"))>0:break
+        time.sleep(.01)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        results=list(executor.map(lambda pair:req(port if pair[0]%2==0 else port2,'/api/generate',payload(),pair[1]),enumerate(identities)))
+    assert blocker.wait(timeout=5)==0
+    accepted=[(r[1]['id'],identities[i],port if i%2==0 else port2) for i,r in enumerate(results) if r[0]==202]
+    assert len(accepted)==4,[(r[0],r[1]) for r in results]
+    assert all(r[0] in (202,402) for r in results),results
+    for job,cookie,origin in accepted:assert complete(origin,job,cookie)['status']=='done'
+    assert psql('SELECT balance FROM shared_ledger')=='0'
+    assert psql("SELECT COALESCE(SUM(reserved),0) FROM jobs WHERE status IN ('queued','running')")=='0'
+    check('concurrent reservation locks shared ledger, prevents overspending')
+    # Persist a delivered image and interrupted reservation, then boot again.
+    for process in PROCESSES:process.terminate();process.wait(timeout=10)
+    now=int(time.time()*1000);job='e'*32;account=one['accountId']
+    psql(f"""UPDATE shared_ledger SET balance=1000;
+INSERT INTO jobs(id,account,request_key,status,phase,reserved,created,params,result) VALUES('{job}','{account}','recovery-test-00001','running','saving',30,{now},'{{"prompt":"recovery"}}','{{}}');
+INSERT INTO stored_images(job,idx,account,file,mime,created,object_url,preview_url,hidden) VALUES('{job}',0,'{account}','missing-local','image/png',{now},'https://mock.invalid/original','https://mock.invalid/preview',TRUE);
+INSERT INTO video_jobs(id,account,request_key,fingerprint,status,phase,created,reserved,prompt,duration,ratio,resolution) VALUES('{'f'*32}','{account}','video-boot-test-0001','f','queued','queued',{now},480,'test',4,'16:9','768P');""")
+    def snapshot():
+        tables=psql("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename").splitlines()
+        return [psql(f"SELECT COALESCE(jsonb_agg(r ORDER BY r::text),'[]'::jsonb) FROM (SELECT to_jsonb(t) AS r FROM {table} t) x") for table in tables]
+    before=snapshot();port,server=start(0,maintenance=True)
+    health=req(port,'/api/health');assert health[0]==200 and health[1]['database']=='postgres' and health[1]['maintenance']
+    for endpoint,content in [('/api/bootstrap',None),('/api/templates',None),('/api/history',None),('/api/generate',payload()),(prefix+'/login',{'username':'test-admin','password':'test-password'}),(prefix+'/recharge',amount),('/manage/local_test_admin_path_123456',None)]:
+        assert req(port,endpoint,content,c1)[0]==503,endpoint
+    assert req(port,'/')[0]==200
+    time.sleep(.5)
+    assert before==snapshot(),'maintenance changed database rows'
+    server.terminate();server.wait(timeout=10)
+    check('maintenance health/static only; API, admin, recovery and workers make no writes')
+    port,server=start(0)
+    recovered=req(port,'/api/jobs/'+job,cookie=c1);assert recovered[0]==200 and recovered[1]['charged']==.3,recovered
+    assert psql('SELECT balance FROM shared_ledger')=='970'
+    assert psql(f"SELECT hidden FROM stored_images WHERE job='{job}'")=='t'
+    assert recovered[1]['images']==[]
+    assert psql("SELECT reserved FROM video_jobs WHERE id='"+'f'*32+"'")=='0'
+    server.terminate();server.wait(timeout=10);port,server=start(0)
+    assert psql('SELECT balance FROM shared_ledger')=='970'
+    check('restart journals remote images once, releases video hold without minting money')
+    server.terminate();server.wait(timeout=10)
+    psql('UPDATE shared_ledger SET balance=10000')
+    resumed_ids=[f'{i:032x}' for i in range(1,8)]
+    for index,video_id in enumerate(resumed_ids):
+        psql(f"INSERT INTO video_jobs(id,account,request_key,fingerprint,status,phase,created,started,reserved,prompt,duration,ratio,resolution,provider_id) VALUES('{video_id}','{account}','resume-many-{index:08d}','f','running','running',{now},{now},480,'test',4,'16:9','768P','mock-video-{index}')")
+    Provider.peak=0
+    port,server=start(0)
+    for _ in range(300):
+        if psql("SELECT COUNT(*) FROM video_jobs WHERE status IN ('queued','running')")=='0':break
+        time.sleep(.1)
+    assert psql("SELECT COUNT(*) FROM video_jobs WHERE status='done' AND charged=480")== '8'
+    assert psql('SELECT balance FROM shared_ledger')=='6640'
+    assert 1<=Provider.peak<=4,Provider.peak
+    server.terminate();server.wait(timeout=10);port,server=start(0)
+    assert psql('SELECT balance FROM shared_ledger')=='6640'
+    check('seven interrupted videos all resume through normal bounded workers and charge once')
+    # Kill the only leased PostgreSQL session. The old pool may not silently
+    # reconnect, and therefore cannot write after a new primary takes over.
+    before=psql('SELECT balance FROM shared_ledger');jobs_before=psql('SELECT COUNT(*) FROM jobs')
+    blocker=subprocess.Popen(['runuser','-u','postgres','--','psql','-X','-qAt','-v','ON_ERROR_STOP=1','-d',DB,'-c','BEGIN;SELECT balance FROM shared_ledger WHERE id=1 FOR UPDATE;SELECT pg_sleep(3);COMMIT'],cwd='/tmp',stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    for _ in range(50):
+        if int(psql("SELECT COUNT(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event='PgSleep'"))>0:break
+        time.sleep(.01)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        writing=executor.submit(req,port,'/api/generate',payload(),c1)
+        for _ in range(50):
+            if int(psql("SELECT COUNT(*) FROM pg_stat_activity WHERE datname=current_database() AND application_name='jianlai-primary' AND wait_event_type='Lock'"))>0:break
+            time.sleep(.01)
+        else:raise AssertionError('primary transaction never waited on independent ledger lock')
+        psql(f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='{DB}' AND usename='{ROLE}' AND application_name='jianlai-primary'")
+        try:response=writing.result(timeout=10);assert response[0]>=500,response
+        except (OSError,urllib.error.URLError):pass
+    assert blocker.wait(timeout=5)==0
+    for _ in range(100):
+        if server.poll() is not None:break
+        time.sleep(.1)
+    assert server.poll() is not None,'primary survived lost lease session'
+    assert psql('SELECT balance FROM shared_ledger')==before
+    assert psql('SELECT COUNT(*) FROM jobs')==jobs_before
+    port,server=start(0)
+    assert req(port,'/api/health')[0]==200
+    assert psql('SELECT balance FROM shared_ledger')==before
+    check('lost lease session fails closed without pool reconnect; new primary can take over')
+
+    fallback_config=WORK/'missing-database.env';fallback_config.write_text('DATABASE_MODE=postgres\n')
+    no_fallback=WORK/'no-fallback';no_fallback.mkdir()
+    env={**os.environ,'DATA_DIR':str(no_fallback),'APP_ROOT':str(ROOT/'app'),'CONFIG_FILE':str(fallback_config),'VISION_CONFIG_FILE':str(WORK/'absent'),'IMAGE_FALLBACK_CONFIG_FILE':''}
+    result=subprocess.run([str(BINARY)],env=env,capture_output=True,timeout=10)
+    assert result.returncode!=0 and b'DATABASE_MODE=postgres requires DATABASE_URL' in result.stderr
+    assert not (no_fallback/'state.sqlite').exists()
+    sqlite_port,sqlite_server=start(9,mode='sqlite')
+    assert req(sqlite_port,'/api/health')[1]['database']=='sqlite'
+    local,cookie=bootstrap(sqlite_port)
+    generated=req(sqlite_port,'/api/generate',payload(),cookie);assert generated[0]==202,generated
+    assert complete(sqlite_port,generated[1]['id'],cookie)['charged']==.3
+    import sqlite3
+    with sqlite3.connect(WORK/'data9/state.sqlite') as conn:
+        assert conn.execute('SELECT balance FROM shared_ledger').fetchone()[0]==49970
+        assert 'fingerprint' in [r[1] for r in conn.execute('PRAGMA table_info(author_tasks)')]
+    check('explicit PG missing URL fails closed; default SQLite rollback path still generates/bills')
+    sqlite_server.terminate();sqlite_server.wait(timeout=10)
+    timestamp=int(time.time()*1000)
+    with sqlite3.connect(WORK/'data9/state.sqlite') as conn:
+        for index in range(7):
+            conn.execute("INSERT INTO video_jobs(id,account,requestKey,fingerprint,status,phase,created,started,reserved,prompt,duration,ratio,resolution,provider_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(f'{index+101:032x}',local['accountId'],f'sqlite-resume-{index:08d}','f','running','running',timestamp,timestamp,480,'test',4,'16:9','768P',f'mock-sqlite-{index}'))
+    Provider.peak=0
+    sqlite_port,sqlite_server=start(9,mode='sqlite')
+    for _ in range(200):
+        with sqlite3.connect(WORK/'data9/state.sqlite') as conn:
+            active=conn.execute("SELECT COUNT(*) FROM video_jobs WHERE status IN ('queued','running')").fetchone()[0]
+        if active==0:break
+        time.sleep(.1)
+    with sqlite3.connect(WORK/'data9/state.sqlite') as conn:
+        assert conn.execute('SELECT balance FROM shared_ledger').fetchone()[0]==46610
+        assert conn.execute("SELECT COUNT(*) FROM video_jobs WHERE status='done' AND charged=480").fetchone()[0]==7
+    assert 1<=Provider.peak<=4,Provider.peak
+    check('retained SQLite also resumes seven videos through normal four worker slots')
+
+    print('PostgreSQL business HTTP integration: ALL PASSED',flush=True)
+except BaseException:
+    for log in LOGS:log.flush()
+    for path in WORK.glob('server*.log'):
+        print(path.name+':\n'+path.read_text()[-4000:],file=sys.stderr)
+    raise
+finally:
+    for p in PROCESSES:
+        if p.poll() is None:p.terminate();p.wait(timeout=10)
+    for f in LOGS:f.close()
+    subprocess.run(['runuser','-u','postgres','--','dropdb','--if-exists',DB],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    psql(f'DROP ROLE IF EXISTS {ROLE}',database='postgres')
+    shutil.rmtree(WORK)

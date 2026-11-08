@@ -1,0 +1,26 @@
+{
+  "name": "剑来生图工作台",
+  "short_name": "剑来工作台",
+  "description": "在线创作、编辑和管理生图任务",
+  "start_url": "/jianlai/",
+  "scope": "/jianlai/",
+  "display": "standalone",
+  "background_color": "#f7f8fa",
+  "theme_color": "#f7f8fa",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/jianlai/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/jianlai/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "id": "/jianlai/"
+}

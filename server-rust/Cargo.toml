@@ -1,0 +1,43 @@
+[package]
+name = "image-workbench-server"
+version = "2.0.0"
+edition = "2021"
+rust-version = "1.88"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream", "charset"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "migrate", "macros", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+crc32fast = "1"
+rand = "0.8"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+scrypt = "0.11"
+subtle = "2"
+regex = "1"
+url = "2"
+mime_guess = "2"
+fs2 = "0.4"
+futures-util = "0.3"
+image-workbench-core = { path = "../rust-core" }
+
+[profile.release]
+strip = true
+lto = false
+
+[profile.dev.package.scrypt]
+opt-level = 3
+[profile.dev.package.salsa20]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.hmac]
+opt-level = 3

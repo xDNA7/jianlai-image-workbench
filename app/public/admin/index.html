@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>管理工作台 · 剑来华东</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./admin.css"></head>
+<body><header class="topbar"><div class="brand">剑来华东 <span>·</span> 中台<small>管理工作台</small></div>
+<div id="admin-identity" class="hidden"><span class="identity">ZSY · 管理员</span><button id="logout">退出登录</button></div>
+</header>
+<section id="login-view" class="login-wrap"><div class="login-card"><div class="eyebrow">管理入口</div>
+<h1>登录管理工作台</h1><p class="muted">管理生成额度、模板与用户作品。</p><form id="login-form"><label>管理员账号<input id="username" name="username" value="ZSY" autocomplete="username" required></label>
+<label>密码<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+<p id="login-error" class="inline-error" role="alert"></p><button class="primary" type="submit">登录</button></form><small class="login-note">管理员密码由服务端配置。</small></div>
+</section>
+
+<div id="admin-app" class="hidden"><nav class="nav"><button data-view="overview" class="active"><span>◈</span>额度总览</button><button data-view="templates"><span>▧</span>模板管理</button><button data-view="works"><span>▦</span>用户作品</button><div class="retention-nav">作品保留规则<br><b>用户可见 7 天</b><br>管理员保留 30 天</div>
+</nav><main>
+<section id="overview-view" class="view"><div class="page-heading"><div><div class="eyebrow">生成额度</div>
+<h1>额度总览</h1><p>所有用户共享的生成余额，在这里统一补充。</p></div>
+<button class="refresh" data-refresh="overview">↻ 刷新余额</button></div>
+<div class="overview-grid"><article class="balance-panel"><div class="balance-top"><span>当前总余额</span><span class="balance-state">服务端账本</span></div>
+<div id="pool-balance" class="big-balance">—</div>
+<p id="balance-description">成功生成后扣费，失败不扣费。</p><div class="balance-footer"><span>普通生成 2 张 · ¥0.80</span><span>修图 1 张 · ¥0.40</span></div>
+</article><article class="recharge-panel"><h2>充值总余额</h2><p class="muted">按人民币增加应用生成额度。</p><form id="recharge-form"><label>充值金额<input id="recharge-amount" inputmode="decimal" placeholder="例如 100.00" autocomplete="off" required></label>
+<div class="amount-presets"><button type="button" data-amount="100.00">¥100</button><button type="button" data-amount="500.00">¥500</button><button type="button" data-amount="1000.00">¥1,000</button></div>
+<p id="recharge-error" class="inline-error" role="alert"></p><button type="submit" class="primary">确认增加额度</button></form></article></div>
+<div class="stat-strip"><div><span>模板总数</span><b id="stat-templates">—</b></div>
+<div><span>有作品的用户</span><b id="stat-users">—</b></div>
+<div><span>保留作品</span><b id="stat-images">—</b></div>
+<div><span>实际删除</span><b>30 天后</b></div>
+</div>
+<section id="ledger-section" class="panel hidden"><div class="section-heading"><h2>最近账本</h2><span class="muted">服务端记录</span></div>
+<div class="table-scroll"><table><thead><tr><th>时间</th><th>类型</th><th>变动金额</th><th>余额</th></tr></thead><tbody id="ledger-list"></tbody></table></div>
+</section>
+<article class="retention-card"><span>◷</span><div><h3>作品生命周期</h3><p>生成后 7 天内用户可见。管理员按用户目录查看近 30 天作品，超过 30 天实际删除。手动删除立即清除对应图片，无法恢复。</p></div>
+</article></section>
+
+<section id="templates-view" class="view hidden"><div class="page-heading"><div><div class="eyebrow">内容管理</div>
+<h1>模板管理</h1><p>维护精选模板的内容、参数与授权预览。</p></div>
+<button id="add-template" class="primary">＋ 新增模板</button></div>
+<div class="library-toolbar"><div id="category-filters" class="filters"><button data-category="all" class="active">全部</button><button data-category="fun">人像趣味</button><button data-category="policy">销售政策</button><button data-category="reward">销售奖励</button><button data-category="ranking">排行榜</button><button data-category="poster">海报</button><button data-category="comic">漫画</button><button data-category="infographic">信息图</button><button data-category="social">社交媒体</button></div>
+<input id="template-search" type="search" placeholder="搜索名称或标签" aria-label="搜索模板"></div>
+<div class="section-heading"><span id="template-count" class="muted">加载模板…</span><button class="text-button" data-refresh="templates">↻ 刷新列表</button></div>
+<div id="template-gallery" class="template-gallery"></div>
+</section>
+
+<section id="works-view" class="view hidden"><div class="page-heading"><div><div class="eyebrow">私有作品</div>
+<h1>用户作品目录</h1><p>按账户编号分组，仅管理员可通过私有接口查看。</p></div>
+<button data-refresh="works">↻ 刷新目录</button></div>
+<div class="works-layout"><aside class="folder-panel"><label for="user-search">查找账户编号</label>
+<input id="user-search" type="search" placeholder="输入编号片段"><div id="user-folders" class="user-folders"></div>
+</aside><section class="work-panel"><div class="section-heading"><div><h2 id="folder-heading">选择用户目录</h2><p id="folder-description" class="muted">查看该账户近 30 天内的作品。</p></div>
+<span id="image-count" class="muted"></span></div>
+<div id="work-gallery" class="work-gallery"><div class="empty">从左侧选择一个用户目录。</div>
+</div>
+</section>
+</div>
+</section>
+
+</main></div>
+
+<dialog id="template-dialog" class="template-dialog"><form id="template-form"><div class="dialog-heading"><div><div class="eyebrow">精选模板</div>
+<h2>新增模板</h2></div>
+<button type="button" data-close="template-dialog" class="close" aria-label="关闭新增模板">×</button></div>
+<div class="dialog-scroll"><section class="author-workbench"><div class="author-modes" role="group" aria-label="模板创建方式"><button type="button" data-author-mode="upload" class="active" aria-pressed="true">上传图片反推</button><button type="button" data-author-mode="generate" aria-pressed="false">生图</button></div>
+<div id="author-upload"><label>上传参考图片<input id="author-image" type="file" accept="image/png,image/jpeg,image/webp"><small>PNG、JPEG 或 WebP，最多 10 MB。上传后提取可复用的画面结构。</small></label>
+<img id="author-image-preview" class="author-image-preview hidden" alt="上传的参考图片"></div>
+<label><span id="author-prompt-label">补充要求（可选）</span><textarea id="author-prompt" rows="3" maxlength="12000" placeholder="说明需要保留的风格、构图与可替换内容"></textarea></label>
+<div class="author-actions"><button id="author-start" type="button" class="primary">反推模板草稿</button><button id="author-resume" type="button" class="hidden">重新读取任务</button><span id="author-status" role="status" aria-live="polite">先创建草稿，再在下方审核与保存。</span></div>
+<p id="author-error" class="inline-error" role="alert"></p><p id="author-warning" class="muted"></p></section>
+<div class="draft-heading"><h3>结构化草稿</h3><span class="muted">检查例图、提示词与可替换内容后保存。</span></div>
+<div class="form-grid"><label>模板名称<input name="title" maxlength="100" required placeholder="例如：季度销售荣誉榜"></label>
+<label>分类<select name="category"><option value="fun">人像趣味</option><option value="policy">销售政策</option><option value="reward">销售奖励</option><option value="ranking">排行榜</option><option value="poster">设计海报</option><option value="comic">漫画</option><option value="infographic">信息图</option><option value="social">社交媒体</option></select></label>
+</div>
+<label>标签<input name="tags" placeholder="使用逗号分隔，例如：季度,荣誉,团队" maxlength="300"></label>
+<label>画面提示词<textarea name="prompt" rows="4" maxlength="12000" required placeholder="描述构图、材质、文字层级。用 {{标题}} 表示可编辑参数。"></textarea></label>
+<div id="prompt-sections" class="prompt-sections hidden"><div class="parameter-heading"><b>提示词结构</b><small>修改后同步到画面提示词。</small></div>
+<div id="prompt-section-rows"></div>
+</div>
+<img id="author-result-preview" class="author-result-preview hidden" alt="模板草稿预览"><label>海报文字<textarea name="text" rows="2" maxlength="1500" placeholder="只填写需要出现在画面上的文字，可使用 {{参数}}"></textarea></label>
+<div class="form-grid"><label>画幅<select name="size"><option value="auto">自动画幅</option><option value="1024x1024">1:1 · 方形</option><option value="1536x1024">3:2 · 横版</option><option value="1024x1536" selected>2:3 · 竖版</option><option value="1536x864">16:9 · 横屏</option><option value="864x1536">9:16 · 手机竖屏</option><option value="1365x1024">4:3 · 横版</option><option value="1024x1365">3:4 · 竖版</option><option value="864x1872">9:19.5 · 手机长屏</option></select></label>
+<label>质量<select name="quality"><option value="auto">自动质量</option><option value="low">标准</option><option value="medium">精细</option><option value="high">高质量</option></select></label>
+</div>
+<label class="checkbox"><input name="requiresImage" type="checkbox">支持人物替换（上传照片可选）</label><label id="admin-face-swap-module">人物替换提示词<textarea name="faceSwapPrompt" rows="3" maxlength="4000" placeholder="上传人物照片时才生效；不上传照片时，系统自动生成人物。"></textarea><small>独立模块。无照片时不会发送这些替换身份要求。</small></label>
+<input name="preview" type="hidden"><p class="muted">上传图片或生成例图会自动作为模板预览。</p>
+<div class="parameter-heading"><div><b>可编辑参数</b><small>名称需与提示词中的 {{参数}} 对应。</small></div>
+<button id="add-parameter" type="button">＋ 添加参数</button></div>
+<div id="parameter-rows"></div>
+<p id="template-error" class="inline-error" role="alert"></p></div>
+<div class="dialog-footer"><button type="button" data-close="template-dialog">取消</button><button type="submit" class="primary">保存并加入模板库</button></div>
+</form></dialog>
+<dialog id="confirm-dialog" class="confirm-dialog"><h2 id="confirm-title">确认操作</h2><p id="confirm-message"></p><div class="dialog-footer"><button id="confirm-cancel">取消</button><button id="confirm-action" class="danger">确认删除</button></div>
+</dialog>
+<dialog id="image-dialog" class="image-dialog"><div class="image-dialog-heading"><div><h2 id="image-title">作品详情</h2><small id="image-date"></small></div>
+<button data-close="image-dialog" class="close" aria-label="关闭作品详情">×</button></div>
+<div class="image-detail-body"><img id="detail-image" src="data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%271%27%20height=%271%27/%3E" alt="作品原图"><aside><label>原始提示词</label>
+<p id="image-prompt"></p><button id="image-download">↓ 下载原图</button><button id="image-delete" class="danger-outline">永久删除图片</button><p class="muted">删除会实际清除文件，不能撤销。</p></aside></div>
+</dialog>
+<div id="toast" popover="manual" role="status"></div>
+<script type="module" src="./admin.js"></script></body></html>

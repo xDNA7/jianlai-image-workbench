@@ -1,0 +1,58 @@
+/* Local navigation and browsing surfaces share the workbench's semantic tokens. */
+.chat-theme .jl-sidebar-content {
+  gap: 28px;
+  color: var(--text-primary);
+}
+.chat-theme .jl-sidebar-content .jl-sidebar-brand {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+}
+.chat-theme .jl-sidebar-content nav { gap: 6px; }
+.chat-theme .jl-sidebar-content .jl-nav-item {
+  min-height: 46px;
+  height: auto;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: .875rem;
+  line-height: 1.25rem;
+  color: var(--text-secondary);
+  animation: none;
+  transition: none;
+  transform: none;
+}
+.chat-theme .jl-sidebar-content .jl-nav-item[aria-current='page'] {
+  background: var(--surface-muted);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.chat-theme .jl-sidebar-content .jl-clear-thread,
+.chat-theme .jl-sidebar-content .jl-clear-confirm button,
+.chat-theme .jl-templates button,
+.chat-theme .jl-gallery-content button {
+  min-height: 44px;
+  height: auto;
+  font-size: .875rem;
+  line-height: 1.25rem;
+  animation: none;
+  transition: none;
+  transform: none;
+}
+.chat-theme .jl-sidebar-footer { padding-bottom: 4px; }
+.chat-theme .jl-clear-thread { color: var(--text-secondary); }
+.chat-theme .jl-account { border-color: var(--line-default); }
+.chat-theme .jl-templates button[aria-label^='删除模板：'],
+.chat-theme .jl-gallery-content button[aria-label='收起画廊'] { min-width: 44px; }
+.chat-theme .jl-template-card {
+  border-color: var(--line-default);
+  background: var(--surface-raised);
+}
+.chat-theme .jl-template-card:hover { border-color: var(--text-secondary); }
+.chat-theme .jl-gallery-content .jl-gallery-filter button {
+  min-width: 64px;
+  padding-inline: 16px;
+}
+
+.chat-theme .jl-templates button[aria-label^='删除模板：'] svg,
+.chat-theme .jl-gallery-content button[aria-label='收起画廊'] svg { width: 20px; height: 20px; }

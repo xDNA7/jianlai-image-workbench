@@ -1,0 +1,50 @@
+.generation-waiting { display: grid; gap: 12px; min-width: 0; }
+.generation-canvases { position:relative; overflow:hidden; border-radius:14px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.generation-canvases-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.generation-waiting .generation-canvas { position: relative; display: grid; place-items: center; margin-inline: auto; overflow: hidden; border: 1px solid var(--line-default); border-radius: 12px; background: var(--surface-muted); color: var(--text-secondary); }
+/* Disable the legacy per-image shimmer; the group owns one sweep. */
+.generation-waiting .generation-canvas::after {content:none; animation:none}
+.generation-waiting .generation-canvases::after { content: ''; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 20%, color-mix(in srgb, var(--surface-canvas) 65%, transparent) 50%, transparent 80%); transform: translateX(-100%); animation: generation-sweep 2.8s linear infinite; }
+.generation-canvas-frame { position: absolute; inset: 16px; border: 1px solid color-mix(in srgb, var(--line-default) 70%, transparent); border-radius: 6px; }
+.generation-canvas-icon { position: relative; z-index: 1; opacity: .7; }
+.generation-canvas-orbit { position: absolute; width: 64px; height: 64px; border: 1px solid var(--line-default); border-radius: 50%; animation: generation-orbit 5s linear infinite; }
+.generation-canvas:not(:first-child) .generation-canvas-orbit {animation:none}
+.generation-canvas-orbit span { position: absolute; top: -3px; left: 28px; width: 6px; height: 6px; border-radius: 50%; background: var(--action-primary); }
+.generation-canvas-label { position: absolute; bottom: 22px; font-size: .75rem; line-height: 1rem; font-variant-numeric: tabular-nums; }
+.generation-status-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.generation-status-copy { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; min-width: 0; font-size: .875rem; line-height: 1.25rem; }
+.generation-phase { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+.generation-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--action-primary); }
+.generation-elapsed { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.generation-waiting button, .generation-poll-error button { min-height: 44px; min-width: 44px; font-size: .875rem; flex-shrink: 0; }
+.generation-waiting .generation-progress { position: relative; height: 3px; overflow: hidden; border-radius: 99px; background: var(--surface-muted); }
+.generation-waiting .generation-progress::after { content: ''; position: absolute; inset: 0; width: 30%; border-radius: inherit; background: var(--action-primary); animation: generation-progress 2s linear infinite; }
+.generation-detail { margin: 0; font-size: .875rem; line-height: 1.25rem; color: var(--text-secondary); overflow-wrap: anywhere; }
+.generation-poll-error { display: grid; gap: 8px; justify-items: start; font-size: .875rem; line-height: 1.25rem; overflow-wrap: anywhere; }
+.generation-poll-error p { margin: 0; }
+.generation-waiting[data-motion-paused='true'] .generation-canvases::after,
+.generation-waiting[data-motion-paused='true'] .generation-canvas-orbit,
+.generation-waiting[data-motion-paused='true'] .generation-pulse,
+.generation-waiting[data-motion-paused='true'] .generation-progress::after { animation-play-state: paused; }
+@keyframes generation-sweep { to { transform: translateX(100%); } }
+@keyframes generation-orbit { to { transform: rotate(360deg); } }
+@keyframes generation-progress { from { transform: translateX(-110%); } to { transform: translateX(440%); } }
+@media (prefers-reduced-motion: reduce) {
+  .generation-waiting .generation-canvases::after,
+  .generation-waiting .generation-canvas-orbit,
+  .generation-waiting .generation-pulse,
+  .generation-waiting .generation-progress::after { animation: none; }
+  .generation-waiting .generation-canvases::after { display: none; }
+  .generation-waiting .generation-progress::after { width: 30%; transform: translateX(110%); opacity: .35; }
+}
+
+.job-card figure :is(button, a), .job-card-error button { min-width: 44px; min-height: 44px; }
+.job-card-error button, .job-card-error input { font-size: .875rem; }
+
+@media (max-width: 479px) {
+  .job-card > .grid {grid-template-columns:minmax(0,1fr)}
+}
+.job-card-error {min-width:0}
+.job-card-error > .grid {min-width:0;flex:1}
+.job-card-error input {font-size:1rem;min-height:44px}
+.job-card-error input[type=file] {width:100%;min-width:0}

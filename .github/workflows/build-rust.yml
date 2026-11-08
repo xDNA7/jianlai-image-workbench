@@ -1,0 +1,55 @@
+name: Build Rust server
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Keep the deployment ABI aligned with the current server baseline.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            server-rust -> target
+            rust-core -> target
+      - name: Check formatting
+        working-directory: server-rust
+        run: cargo fmt -- --check
+      - name: Check shared-core formatting
+        working-directory: server-rust
+        run: cargo fmt --manifest-path ../rust-core/Cargo.toml -- --check
+      - name: Build release binary
+        working-directory: server-rust
+        run: cargo build --release --locked --bin image-workbench-server
+      - name: Run Rust unit tests
+        working-directory: server-rust
+        run: cargo test --release --locked --bin image-workbench-server
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp server-rust/target/release/image-workbench-server dist/
+          python3 - <<'PY'
+          import re, subprocess
+          out = subprocess.check_output(["readelf", "--version-info", "dist/image-workbench-server"], text=True)
+          versions = [tuple(map(int, x.split("."))) for x in re.findall(r"GLIBC_(\d+\.\d+)", out)]
+          maximum = max(versions)
+          assert maximum <= (2, 36), f"binary requires GLIBC_{'.'.join(map(str, maximum))}"
+          print("maximum required GLIBC:", ".".join(map(str, maximum)))
+          PY
+          (cd dist && sha256sum image-workbench-server > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-workbench-server-linux-amd64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

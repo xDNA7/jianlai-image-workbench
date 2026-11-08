@@ -1,0 +1,39 @@
+.jl-plan { min-width: 0; }
+.jl-plan-heading { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:4px 12px; }
+.jl-plan p { margin: 0; }
+.jl-plan-summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; font-size: 1rem; line-height: 1.5rem; }
+.jl-plan-parameters, .jl-plan-cost, .jl-plan-fee-note, .jl-plan-reference, .jl-plan-reference-upload, .jl-plan-sources { font-size: .875rem; line-height: 1.25rem; }
+.jl-plan-parameters, .jl-plan-fee-note { color: var(--text-secondary); }
+.jl-plan-reference { display: flex; align-items: center; gap: 8px; }
+.jl-plan-reference img, .jl-plan-source img { flex-shrink: 0; }
+.jl-plan-reference-upload, .jl-plan-sources { display: grid; gap: 8px; overflow-wrap: anywhere; }
+.jl-plan-source { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.jl-plan-source > div { min-width: 120px; }
+.jl-plan-source > button { margin-left: auto; }
+.jl-plan-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; cursor: pointer; list-style: none; font-size: .875rem; line-height: 1.25rem; color: var(--text-secondary); }
+.jl-plan-details > summary::-webkit-details-marker { display: none; }
+.jl-plan-details > summary > svg { transition: transform 200ms cubic-bezier(.23, 1, .32, 1); }
+.jl-plan-details[open] > summary > svg { transform: rotate(180deg); }
+.jl-plan-details > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; border-radius: 4px; }
+.jl-plan-editor { display: grid; gap: 12px; padding: 4px 0 12px; }
+.jl-plan input, .jl-plan textarea { font-size: 1rem; line-height: 1.5rem; min-height: 44px; }
+.jl-plan input[type=file] { width: 100%; min-width: 0; }
+.jl-plan input[type=file]::file-selector-button { min-height: 44px; margin-right: 8px; }
+.jl-plan button { min-height: 44px; white-space: normal; height: auto; }
+.jl-plan button > span { white-space: normal; min-width: 0; flex-shrink: 1; }
+.jl-plan-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding-top: 12px; border-top: 1px solid var(--line-default); }
+.jl-plan-cost { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-variant-numeric: tabular-nums; }
+.jl-plan-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.jl-plan-actions > button { font-size: 1rem; line-height: 1.5rem; }
+.jl-plan-fee-note { flex-basis: 100%; }
+@media (prefers-reduced-motion: reduce) {
+  .jl-plan-details > summary > svg { transition: none; }
+}
+
+.jl-plan-current-reference {display:flex;align-items:center;gap:8px;padding:6px 0;color:var(--text-secondary);font-size:.875rem;line-height:1.25rem;overflow-wrap:anywhere}
+.jl-plan-current-reference>span {min-width:0}
+
+.jl-plan-sample-list {display:grid;gap:8px;max-height:240px;overflow-y:auto;overscroll-behavior:contain;padding:2px}
+.jl-plan-source>input[type=checkbox] {width:18px;height:18px;flex:none;accent-color:var(--action-primary)}
+.jl-plan-source {flex-wrap:nowrap;cursor:pointer}
+.jl-plan-source a {overflow-wrap:anywhere}

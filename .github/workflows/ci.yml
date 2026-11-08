@@ -1,0 +1,166 @@
+name: Public CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publication:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Publication guard regression tests
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: Check complete public history and metadata
+        shell: bash
+        run: |
+          revision=HEAD
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then revision="$GITHUB_REF"; fi
+          python3 scripts/public_repo_check.py --repo . --revision "$revision" --ref-name "$GITHUB_REF" --policy scripts/public_repo_policy.json
+      - name: Install pinned secret scanner
+        run: bash scripts/install-gitleaks.sh "$RUNNER_TEMP/gitleaks"
+      - name: Scan full history including the initial commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! "$RUNNER_TEMP/gitleaks" git --log-opts="HEAD --full-history -m" --redact --no-banner . > "$RUNNER_TEMP/secret-scan.log" 2>&1; then
+            echo 'Secret scan blocked publication; inspect findings privately.'
+            exit 1
+          fi
+          echo 'Complete history secret scan passed.'
+
+  frontend:
+    needs: publication
+    # Largest compatible standard public Linux runner; no paid runner budget enabled.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      PUBLIC_ASSET_BASE: https://public-assets.example/
+      VITE_PUBLIC_ASSET_BASE: https://public-assets.example/
+      VITE_APP_BASE: /jianlai/
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Record runner capacity and test concurrency
+        run: |
+          python3 - <<'PY'
+          import json, os, platform
+          memory = int(next(line.split()[1] for line in open('/proc/meminfo') if line.startswith('MemTotal:'))) // 1024
+          workers = max(1, min(os.cpu_count() or 1, memory // 2048))
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f'PW_WORKERS={workers}\n')
+          print(json.dumps({'cpus': os.cpu_count(), 'memory_mib': memory, 'arch': platform.machine(), 'workers': workers}))
+          PY
+          node --version
+          bun --version
+      - run: bun ci
+        working-directory: ui
+      - run: bun run typecheck
+        working-directory: ui
+      - run: bun run lint
+        working-directory: ui
+      - run: bun run build
+        working-directory: ui
+      # Build-dependent tests must run after generation.
+      - run: bun run test
+        working-directory: ui
+      - run: bunx playwright install --with-deps chromium
+        working-directory: ui
+      - run: bun run test:e2e
+        env:
+          PW_REUSE_BUILD: '1'
+        working-directory: ui
+      - name: Scan exact frontend artifact and create checksums
+        run: |
+          python3 scripts/public_repo_check.py --artifact dist/frontend-spa --policy scripts/public_repo_policy.json
+          cd dist/frontend-spa
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jianlai-studio-react-spa
+          path: dist/frontend-spa/**
+          if-no-files-found: error
+          retention-days: 7
+
+  backend:
+    needs: publication
+    # Ubuntu 22.04 keeps the deployment glibc floor compatible.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          components: rustfmt, clippy
+      - name: Record capacity and remap private build paths
+        run: |
+          python3 - <<'PY'
+          import json, os, platform
+          memory = int(next(line.split()[1] for line in open('/proc/meminfo') if line.startswith('MemTotal:'))) // 1024
+          jobs = max(1, min(os.cpu_count() or 1, memory // 2048))
+          workspace = os.environ['GITHUB_WORKSPACE']
+          home = os.path.expanduser('~')
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f'CARGO_BUILD_JOBS={jobs}\n')
+              f.write(f'RUSTFLAGS=--remap-path-prefix={workspace}=/src --remap-path-prefix={home}=/build-user\n')
+          print(json.dumps({'cpus': os.cpu_count(), 'memory_mib': memory, 'arch': platform.machine(), 'cargo_jobs': jobs}))
+          PY
+          rustc --version
+          cargo --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            server-rust -> target
+            rust-core -> target
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - run: cargo fmt --manifest-path server-rust/Cargo.toml -- --check
+      - run: cargo fmt --manifest-path rust-core/Cargo.toml -- --check
+      - run: cargo clippy --manifest-path server-rust/Cargo.toml --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --manifest-path server-rust/Cargo.toml --locked
+      - run: cargo test --manifest-path rust-core/Cargo.toml --locked
+      - name: Build release binary
+        run: cargo build --manifest-path server-rust/Cargo.toml --release --locked --bin image-workbench-server
+      - name: Check ABI and scan exact binary artifact
+        run: |
+          mkdir -p dist/server-release
+          cp server-rust/target/release/image-workbench-server dist/server-release/
+          python3 - <<'PY'
+          import re, subprocess
+          text = subprocess.check_output(['readelf', '--version-info', 'dist/server-release/image-workbench-server'], text=True)
+          versions = [tuple(map(int, x.split('.'))) for x in re.findall(r'GLIBC_(\d+\.\d+)', text)]
+          assert versions and max(versions) <= (2, 36), 'Unsupported deployment ABI'
+          print('maximum required GLIBC:', '.'.join(map(str, max(versions))))
+          PY
+          python3 scripts/public_repo_check.py --artifact dist/server-release --policy scripts/public_repo_policy.json
+          cd dist/server-release
+          sha256sum image-workbench-server > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-workbench-server-linux-amd64
+          path: dist/server-release/*
+          if-no-files-found: error
+          retention-days: 7
