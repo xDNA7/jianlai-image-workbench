@@ -31,6 +31,7 @@ GIF=gif()
 class Provider(http.server.BaseHTTPRequestHandler):
     active=0
     image_requests={}
+    video_polls=[]
     peak=0
     guard=threading.Lock()
     def log_message(self,*args):pass
@@ -110,6 +111,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
             self.send_response(200);self.send_header('Content-Type','video/mp4');self.end_headers();self.wfile.write(b'\x00\x00\x00\x20ftypisom'+b'\0'*20);return
         with Provider.guard:
             Provider.active+=1;Provider.peak=max(Provider.peak,Provider.active)
+            Provider.video_polls.append(time.monotonic())
         time.sleep(.15)
         self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
         self.wfile.write(json.dumps({'status':'succeeded','content':{'url':f'http://127.0.0.1:{self.server.server_port}/mock.mp4'}}).encode())
@@ -572,8 +574,13 @@ INSERT INTO video_jobs(id,account,request_key,fingerprint,status,phase,created,r
         psql(f"INSERT INTO video_jobs(id,account,request_key,fingerprint,status,phase,created,started,reserved,prompt,duration,ratio,resolution,provider_id) VALUES('{video_id}','{account}','resume-many-{index:08d}','f','running','running',{now},{now},480,'test',4,'16:9','768P','mock-video-{index}')")
     Provider.peak=0
     port,server=start(0)
-    for _ in range(300):
-        if psql("SELECT COUNT(*) FROM video_jobs WHERE status IN ('queued','running')")=='0':break
+    # Seven resumed jobs need two four-slot batches. Each batch sleeps ten
+    # seconds before its first provider poll, plus download/publish/settlement.
+    resume_deadline=time.monotonic()+60
+    while True:
+        active=int(psql("SELECT COUNT(*) FROM video_jobs WHERE status IN ('queued','running')"))
+        if active==0:break
+        assert time.monotonic()<resume_deadline,{'active':active,'videos':psql("SELECT json_agg(json_build_object('status',status,'charged',charged,'error',error)) FROM video_jobs")}
         time.sleep(.1)
     assert psql("SELECT COUNT(*) FROM video_jobs WHERE status='done' AND charged=480")== '8'
     assert psql('SELECT balance FROM shared_ledger')=='6640'
@@ -630,13 +637,20 @@ INSERT INTO video_jobs(id,account,request_key,fingerprint,status,phase,created,r
     with sqlite3.connect(WORK/'data9/state.sqlite') as conn:
         for index in range(7):
             conn.execute("INSERT INTO video_jobs(id,account,requestKey,fingerprint,status,phase,created,started,reserved,prompt,duration,ratio,resolution,provider_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(f'{index+101:032x}',local['accountId'],f'sqlite-resume-{index:08d}','f','running','running',timestamp,timestamp,480,'test',4,'16:9','768P',f'mock-sqlite-{index}'))
-    Provider.peak=0
+    Provider.peak=0;Provider.video_polls=[]
     sqlite_port,sqlite_server=start(9,mode='sqlite')
-    for _ in range(200):
+    # The prior 200x100ms budget ended at the second batch's earliest poll,
+    # before its I/O and settlement. Wait for terminal state within a stated
+    # budget, preserving exact billing assertions and diagnostic state.
+    resume_started=time.monotonic();resume_deadline=resume_started+60
+    while True:
         with sqlite3.connect(WORK/'data9/state.sqlite') as conn:
             active=conn.execute("SELECT COUNT(*) FROM video_jobs WHERE status IN ('queued','running')").fetchone()[0]
+            rows=conn.execute('SELECT status,charged,error FROM video_jobs ORDER BY id').fetchall()
         if active==0:break
+        assert time.monotonic()<resume_deadline,{'active':active,'videos':rows}
         time.sleep(.1)
+    print('SQLite resumed seven videos in %.2fs (60s terminal-state budget); provider poll offsets %s'%(time.monotonic()-resume_started,[round(t-Provider.video_polls[0],2) for t in Provider.video_polls]),flush=True)
     with sqlite3.connect(WORK/'data9/state.sqlite') as conn:
         balance=conn.execute('SELECT balance FROM shared_ledger').fetchone()[0]
         resumed=conn.execute('SELECT status,charged,error FROM video_jobs ORDER BY id').fetchall()

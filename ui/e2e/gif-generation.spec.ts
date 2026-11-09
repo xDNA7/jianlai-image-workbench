@@ -40,7 +40,7 @@ async function install(page: Page, animated: boolean) {
   return submitted
 }
 
-for (const animated of [true, false]) test(`GIF recommendation, confirmation and ${animated ? 'original playback' : 'static fallback warning'}`, async ({ page }) => {
+for (const animated of [true, false]) test(`GIF recommendation, confirmation and ${animated ? 'original playback' : 'static fallback warning'}`, async ({ page }, info) => {
   const submitted = await install(page, animated)
   await page.goto('/', { waitUntil: 'networkidle' })
   await page.getByRole('textbox', { name: '描述你想要的画面' }).fill('小猫揉面 GIF 动图')
@@ -58,6 +58,7 @@ for (const animated of [true, false]) test(`GIF recommendation, confirmation and
   const result = page.locator('.job-card figure')
   await expect(result.locator('img')).toHaveAttribute('src', `${MEDIA}preview.webp`)
   await expect(result.getByRole('link', { name: '下载原图' })).toHaveAttribute('download', `jianlai-${JOB}-0.${animated ? 'gif' : 'webp'}`)
+  await page.screenshot({ path: `test-results/shots/${info.project.name}-gif-${animated ? 'animated' : 'static'}.png` })
   if (animated) {
     await expect(result.locator('figcaption')).toHaveText('GIF · 12 帧 · 3.00 秒 · 4 帧/秒 · 1×1')
     await result.getByRole('button', { name: '放大查看' }).click()
