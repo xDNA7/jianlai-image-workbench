@@ -4,7 +4,7 @@ import { expect, test } from '@playwright/test'
 import type { Page, Route } from '@playwright/test'
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
-const OSS = 'https://public-assets.example/assets/jianlai/'
+const OSS = 'https://actual-production-oss.example/jianlai/'
 const OLD_PROMPT = '旧图：江南小镇和红灯笼'
 const REPLY = '已整理本次画面方案。'
 const PHOTO = fileURLToPath(new URL('../src/design/orange-example.webp', import.meta.url))
@@ -51,6 +51,7 @@ async function install(page: Page) {
       mock.generates.push(request.postDataJSON() as GenerateRequest)
       return json(route, { id: String(mock.generates.length).padStart(32, '0'), status: 'running', phase: 'queued' }, 202)
     }
+    if (/\/jobs\/[a-f0-9]{32}\/images\/0$/.test(path)) return route.fulfill({ contentType: 'image/png', body: PNG })
     const job = path.match(/\/jobs\/(\d{32})$/)
     if (method === 'GET' && job) return json(route, {
       id: job[1], status: 'done', phase: 'done', charged: 0.3, availableCents: 5000 - mock.generates.length * 30,
@@ -201,4 +202,64 @@ test('an invalid replacement upload unpins the old image before the next text tu
   await expect.poll(() => mock.generates.length).toBe(2)
   expect(mock.generates[1].references).toEqual([])
   expect(mock.unexpected).toEqual([])
+})
+
+
+test('two consecutive static edits read authenticated original bytes', async ({ page }) => {
+  const mock = await install(page)
+  const reads: string[] = []
+  await page.route('**/api/jobs/*/images/0', route => { reads.push(route.request().url()); return route.fulfill({ contentType: 'image/png', body: PNG }) })
+  await page.goto('/', { waitUntil: 'networkidle' })
+  await generateAndPin(page)
+  mock.useReference = true
+  for (let round = 0; round < 2; round++) {
+    await send(page, `第 ${round + 1} 次修改，把灯笼改蓝`)
+    await latestPlan(page).getByRole('button', { name: '生成', exact: true }).click()
+    await expect.poll(() => mock.generates.length).toBe(round + 2)
+    await expect(page.getByText(/已完成 · 1 张/)).toHaveCount(round + 2)
+    expect(mock.generates[round + 1]).toMatchObject({ mode: 'edit', references: [`data:image/png;base64,${PNG.toString('base64')}`] })
+    if (round === 0) {
+      await page.getByRole('button', { name: '修改这张图' }).last().click()
+      await page.getByRole('dialog').getByRole('button', { name: '不标记，直接带入对话' }).click()
+    }
+  }
+  expect(reads).toHaveLength(2)
+  expect(mock.unexpected).toEqual([])
+})
+
+for (const upload of [false, true]) test(`unknown result recovers by original key after reload without ${upload ? 'lost upload memory' : 'expired original'} or POST`, async ({ page }) => {
+  const mock = await install(page)
+  const requestKey = 'original-request-key-1234'
+  const jobId = 'a'.repeat(32)
+  await page.addInitScript(({ requestKey, upload }) => localStorage.setItem('jianlai-chat:v1:reference-context', JSON.stringify([
+    { type: 'job', id: 'lost-result', requestKey, status: 'unknown', images: [], started: Date.now(), created: Date.now(),
+      plan: { prompt: '修改旧图', text: '', size: 'auto', quality: 'medium', count: 1, useReference: true },
+      reference: upload ? { kind: 'upload', id: 'lost-upload', name: 'old.png', preview: '' } : { kind: 'picked', url: 'https://expired.example/old.png', preview: '', prompt: '旧图' } },
+  ])), { requestKey, upload })
+  let lookedUp = ''
+  await page.route('**/api/jobs/by-request?**', route => {
+    lookedUp = new URL(route.request().url()).searchParams.get('requestKey') || ''
+    return route.fulfill({ contentType: 'application/json', json: { id: jobId, status: 'done', phase: 'done', charged: .3, images: [{ index: 0, url: `${OSS}original.png` }] } })
+  })
+  await page.goto('/', { waitUntil: 'networkidle' })
+  await page.getByRole('button', { name: '按原请求继续提交', exact: true }).click()
+  await expect(page.getByText(/已完成 · 1 张/)).toBeVisible()
+  expect(lookedUp).toBe(requestKey)
+  expect(mock.generates).toHaveLength(0)
+  expect(mock.unexpected).toEqual([])
+})
+
+
+test('reference read failure creates no task and shows the true client failure source', async ({ page }) => {
+  const mock = await install(page)
+  await page.route('**/api/jobs/*/images/0', route => route.abort('failed'))
+  await page.goto('/', { waitUntil: 'networkidle' })
+  await generateAndPin(page)
+  mock.useReference = true
+  await send(page, '把灯笼改蓝')
+  await latestPlan(page).getByRole('button', { name: '生成', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('未提交，未扣费：无法读取参考图，请重试或重新上传')
+  await expect(page.getByRole('alert')).toContainText('未创建生成任务')
+  await expect(page.getByRole('alert')).not.toContainText('服务端确认失败')
+  expect(mock.generates).toHaveLength(1)
 })

@@ -906,7 +906,7 @@ pub async fn execute(a: &App, job: &str, p: Value) {
     let Ok(account) = row else { return };
     let count = p["count"].as_u64().unwrap_or(1) as usize;
     let mut found = vec![];
-    let mut reason = String::new();
+    let mut reason: String;
     let mut animation = json!({});
     match upstream::generate_detailed(a, &p).await {
         Ok(generated) => {
@@ -956,10 +956,17 @@ pub async fn execute(a: &App, job: &str, p: Value) {
                 }
             }
         }
-        Err(e) => tracing::error!(job, code = e.0, "generation_failed"),
+        Err(e) => {
+            reason = e.1;
+            tracing::error!(job, code = e.0, "generation_failed");
+        }
     }
     let error = if found.is_empty() {
-        "生成未成功，未扣费，请稍后重试".to_owned()
+        if reason.is_empty() {
+            "生成未成功，未扣费，请稍后重试".to_owned()
+        } else {
+            format!("生成未成功，未扣费：{reason}")
+        }
     } else if found.len() < count {
         format!(
             "部分图片生成成功：已完成{}张，未完成{}张，仅按成功图片扣费。原因：{}",

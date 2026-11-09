@@ -5,9 +5,10 @@ import { MousePointer2Icon, ScanIcon, Trash2Icon, XIcon } from 'lucide-react'
 import { Button } from '@/boardui/button'
 import { Textarea } from '@/components/ai/textarea'
 import { MAX_MARKS, NOTE_MAX, boxBetween, incompleteCount, newMark, pointIn } from './marks'
+import type { AnimationPlan } from './types'
 import type { Mark } from './marks'
 
-export type AnnotateTarget = { url: string; preview: string; prompt: string; marks: Mark[] }
+export type AnnotateTarget = { url: string; preview: string; prompt: string; marks: Mark[]; animation?: AnimationPlan }
 
 type Props = {
   target: AnnotateTarget | null

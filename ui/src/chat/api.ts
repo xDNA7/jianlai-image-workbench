@@ -21,7 +21,6 @@ function errorMessage(value: unknown, fallback: string): string {
 
 const assetBase = (import.meta.env.VITE_PUBLIC_ASSET_BASE || (typeof process !== 'undefined' ? process.env.VITE_PUBLIC_ASSET_BASE : '') || 'https://public-assets.example/assets/').replace(/\/?$/, '/')
 const ossBase = assetBase.startsWith('/') ? `${assetBase}jianlai/` : `${assetBase}jianlai/`
-const ossOrigin = new URL(ossBase, typeof window !== 'undefined' ? window.location.origin : 'http://localhost').origin
 
 export function apiBase(path = typeof window === 'undefined' ? '/' : window.location.pathname) {
   return path === '/jianlai-test' || path.startsWith('/jianlai-test/') ? '/jianlai-test/' : '/jianlai/'
@@ -237,18 +236,30 @@ export function newRequestKey() {
   return crypto.randomUUID()
 }
 
+export function jobImageReferenceUrl(jobId: string, index: number): string {
+  if (!/^[a-f0-9]{32}$/.test(jobId) || !Number.isSafeInteger(index) || index < 0) throw new Error('图片标识无效，请重新选择图片')
+  return `${apiBase()}api/jobs/${jobId}/images/${index}`
+}
+
 /** Fetches an image and returns it as a data URL for use as a reference. */
 export async function imageToDataUrl(url: string): Promise<string> {
   let sourceUrl = isPublicFigureImageUrl(url) ? `${apiBase()}api/public-image?url=${encodeURIComponent(url)}` : url
+  let ownImage = false
   try {
-    const parsed = new URL(url)
-    const original = parsed.pathname.match(/^\/jianlai\/results\/originals\/[a-f0-9]{64}\/([a-f0-9]{32})-(\d+)\.(?:png|jpe?g|webp)$/)
-    if (parsed.origin === ossOrigin && !parsed.username && !parsed.password && original) {
-      sourceUrl = `${apiBase()}api/jobs/${original[1]}/images/${original[2]}`
+    const parsed = new URL(url, typeof window !== 'undefined' ? window.location.origin : 'http://localhost')
+    const original = parsed.pathname.match(/^\/jianlai\/results\/originals\/[a-f0-9]{64}\/([a-f0-9]{32})-(\d+)\.(?:png|jpe?g|webp|gif)$/)
+    if (!parsed.username && !parsed.password && /^https?:$/.test(parsed.protocol) && original) {
+      sourceUrl = jobImageReferenceUrl(original[1], Number(original[2]))
+      ownImage = true
     }
+    const local = new URL(apiBase(), typeof window !== 'undefined' ? window.location.origin : 'http://localhost')
+    if (parsed.origin === local.origin && parsed.pathname.startsWith(local.pathname) && /^api\/jobs\/[a-f0-9]{32}\/images\/\d+$/.test(parsed.pathname.slice(local.pathname.length))) ownImage = true
   } catch { /* Relative, data and blob references retain their existing route. */ }
   return withRequestTimeout(async (signal) => {
-    const response = await fetch(sourceUrl, { credentials: 'same-origin', signal })
+    const response = await fetch(sourceUrl, { credentials: 'same-origin', signal }).catch((error: unknown) => {
+      if (error instanceof TypeError) throw new Error('无法读取参考图，请重试或重新上传')
+      throw error
+    })
     if (!response.ok) throw new ApiError(response.status, '无法读取上一张图，请重新上传')
     const maxBytes = 32 * 1024 * 1024
     const tooLarge = () => new ApiError(413, '原图超过 32 MB，请下载后缩小再上传')
@@ -262,7 +273,10 @@ export async function imageToDataUrl(url: string): Promise<string> {
     let bytes = 0
     try {
       for (;;) {
-        const { done, value } = await reader.read()
+        const { done, value } = await reader.read().catch((error: unknown) => {
+          if (error instanceof TypeError) throw new Error('无法读取参考图，请重试或重新上传')
+          throw error
+        })
         if (done) break
         bytes += value.byteLength
         if (bytes > maxBytes) {
@@ -273,7 +287,7 @@ export async function imageToDataUrl(url: string): Promise<string> {
       }
     } finally { reader.releaseLock() }
     signal.throwIfAborted()
-    return imageBlobToReference(new Blob(chunks, { type: response.headers.get('content-type')?.split(';')[0] || '' }))
+    return imageBlobToReference(new Blob(chunks, { type: response.headers.get('content-type')?.split(';')[0] || '' }), ownImage)
   }, undefined, '图片读取超时，请重试或重新上传参考图')
 }
 
@@ -295,18 +309,36 @@ export async function fileToDataUrl(file: File): Promise<string> {
   return imageBlobToReference(file)
 }
 
-async function imageBlobToReference(file: Blob): Promise<string> {
+async function imageBlobToReference(file: Blob, allowGeneratedGif = false): Promise<string> {
   const header = new Uint8Array(await file.slice(0, 12).arrayBuffer())
-  const actual = header[0] === 137 && header[1] === 80 && header[2] === 78 && header[3] === 71 && header[4] === 13 && header[5] === 10 && header[6] === 26 && header[7] === 10 ? 'image/png'
+  const gif = /^GIF8[79]a$/.test(String.fromCharCode(...header.slice(0, 6)))
+  const actual = allowGeneratedGif && gif ? 'image/gif' : header[0] === 137 && header[1] === 80 && header[2] === 78 && header[3] === 71 && header[4] === 13 && header[5] === 10 && header[6] === 26 && header[7] === 10 ? 'image/png'
     : header[0] === 255 && header[1] === 216 && header[2] === 255 ? 'image/jpeg'
       : String.fromCharCode(...header.slice(0, 4)) === 'RIFF' && String.fromCharCode(...header.slice(8, 12)) === 'WEBP' ? 'image/webp' : ''
   if (!actual || actual !== file.type) throw new Error('图片格式与文件内容不符，请上传有效的 PNG、JPEG 或 WebP 图片')
+  if (actual === 'image/gif') {
+    const width = header[6] | header[7] << 8
+    const height = header[8] | header[9] << 8
+    if (!width || !height || width > 4096 || height > 4096 || width * height > 4_000_000) throw new Error('动图画幅过大，请缩小后重新上传首帧')
+  }
   let bitmap: ImageBitmap
   try {
     bitmap = await createImageBitmap(file)
     if (!bitmap.width || !bitmap.height) { bitmap.close(); throw new Error('empty image') }
   } catch { throw new Error('图片已损坏或无法解码，请重新选择图片') }
   try {
+    if (actual === 'image/gif') {
+      const canvas = document.createElement('canvas')
+      const scale = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height))
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('无法读取动图首帧，请重新选择参考图')
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+      const firstFrame = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
+      if (!firstFrame || firstFrame.type !== 'image/png' || firstFrame.size > 4 * 1024 * 1024) throw new Error('动图首帧超过 4 MB，请缩小后再试')
+      return blobToDataUrl(firstFrame)
+    }
     return file.size > 1024 * 1024 || Math.max(bitmap.width, bitmap.height) > 2400
       ? await compressBitmap(bitmap, Math.min(file.size, 4 * 1024 * 1024)) : await blobToDataUrl(file)
   } finally { bitmap.close() }

@@ -114,6 +114,7 @@ async function install(page: Page): Promise<Mock> {
       if (response) return json(route, response.body, response.status)
       return json(route, { id: JOB, status: 'running', phase: 'queued' }, 202)
     }
+    if (/\/jobs\/[a-f0-9]{32}\/images\/\d+$/.test(path)) return route.fulfill({ contentType: 'image/png', body: ORIGINAL_PNG })
     if (path.includes('/api/jobs/') && mock.jobResponses.length) {
       const response = mock.jobResponses.shift()!
       return json(route, response.body, response.status)

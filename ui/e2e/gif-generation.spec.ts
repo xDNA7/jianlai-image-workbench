@@ -27,10 +27,11 @@ async function install(page: Page, animated: boolean) {
     if (path.endsWith('/chat') && route.request().method() === 'GET') return json(route, { used: 0, limit: 50 })
     if (path.endsWith('/chat')) return route.fulfill({ contentType: 'text/event-stream', body: [
       ['delta', { text: '已推荐动图参数。' }],
-      ['plan', { prompt: '小猫揉面', text: '', size: 'auto', quality: 'medium', count: 1, useReference: false, animation: PLAN }],
+      ['plan', { prompt: '小猫揉面', text: '', size: 'auto', quality: 'medium', count: 1, useReference: submitted.length > 0, animation: submitted.length ? undefined : PLAN }],
       ['done', {}],
     ].map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join('') })
     if (path.endsWith('/generate')) { submitted.push(route.request().postDataJSON()); return json(route, { id: JOB, status: 'running', phase: 'queued' }, 202) }
+    if (/\/jobs\/[a-f0-9]{32}\/images\/0$/.test(path)) return route.fulfill({ contentType: 'image/gif', body: GIF })
     if (path.includes('/jobs/')) return json(route, { id: JOB, status: 'done', phase: 'done', charged: .3, availableCents: 4970,
       error: animated ? '' : '上游返回静态图片，动图未达标，未自动重试。',
       images: [{ index: 0, url: `${MEDIA}original.${animated ? 'gif' : 'webp'}`, previewUrl: `${MEDIA}preview.webp`, type: animated ? 'image/gif' : 'image/webp', animation: animated ? MEASURED : null }],
@@ -69,4 +70,53 @@ for (const animated of [true, false]) test(`GIF recommendation, confirmation and
     await expect(page.getByText(/未自动重试/)).toBeVisible()
     expect(submitted).toHaveLength(1)
   }
+})
+
+
+test('GIF editing preserves independent animation intent and sends a real PNG first frame', async ({ page }) => {
+  const submitted = await install(page, true)
+  await page.goto('/', { waitUntil: 'networkidle' })
+  const input = page.getByRole('textbox', { name: '描述你想要的画面' })
+  await input.fill('小猫揉面 GIF 动图')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await page.getByRole('region', { name: '生成方案' }).last().getByRole('button', { name: '生成', exact: true }).click()
+  await expect(page.getByText(/已完成 · 1 张/)).toBeVisible()
+  await page.getByRole('button', { name: '修改这张图' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '不标记，直接带入对话' }).click()
+  await expect(page.getByText('使用 GIF 首帧作为参考，重新生成动图')).toBeVisible()
+  await input.fill('脚没动起来')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  const plan = page.getByRole('region', { name: '生成方案' }).last()
+  await expect(plan.getByText(/GIF 动图 · 4 帧\/秒 · 3 秒 · 12 帧/)).toBeVisible()
+  await plan.getByRole('button', { name: '生成', exact: true }).click()
+  await expect.poll(() => submitted.length).toBe(2)
+  expect(submitted[1]).toMatchObject({ mode: 'edit', animation: PLAN })
+  const reference = (submitted[1].references as string[])[0]
+  expect(reference).toMatch(/^data:image\/png;base64,/)
+  expect(Buffer.from(reference.split(',')[1], 'base64').subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+})
+
+
+for (const staticOutput of [false, true]) test(`GIF chat failure direct generation ${staticOutput ? 'respects explicit static intent' : 'inherits canonical reference animation'}`, async ({ page }) => {
+  const submitted = await install(page, true)
+  await page.goto('/', { waitUntil: 'networkidle' })
+  const input = page.getByRole('textbox', { name: '描述你想要的画面' })
+  await input.fill('小猫揉面 GIF 动图')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await page.getByRole('region', { name: '生成方案' }).last().getByRole('button', { name: '生成', exact: true }).click()
+  await expect(page.getByText(/已完成 · 1 张/)).toBeVisible()
+  await page.getByRole('button', { name: '修改这张图' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '不标记，直接带入对话' }).click()
+  await page.route('**/api/chat', route => route.request().method() === 'POST'
+    ? route.fulfill({ status: 502, contentType: 'application/json', json: { error: '对话暂不可用' } }) : route.fallback())
+  await input.fill(staticOutput ? '改成静态图，脚抬起来' : '脚没动起来')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await page.getByRole('button', { name: /按原文直接生成/ }).click()
+  await expect.poll(() => submitted.length).toBe(2)
+  expect(submitted[1]).toMatchObject({ mode: 'edit' })
+  if (staticOutput) expect(submitted[1].animation).toBeUndefined()
+  else expect(submitted[1].animation).toEqual(PLAN)
+  const reference = (submitted[1].references as string[])[0]
+  expect(reference).toMatch(/^data:image\/png;base64,/)
+  expect(Buffer.from(reference.split(',')[1], 'base64').subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
 })

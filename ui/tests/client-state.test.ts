@@ -28,7 +28,7 @@ test('partial delivery shows expected count, actual cost and server reason', asy
   expect(html).toContain('第二张失败')
 })
 
-test('a submitted uploaded job offers rebinding after refresh and blocks replay until bound', async () => {
+test('uploaded jobs require rebinding for new generations but allow unknown request lookup', async () => {
   const { createElement } = await import('react')
   const { renderToStaticMarkup } = await import('react-dom/server')
   const { JobCard } = await import('../src/chat/JobCard')
@@ -37,7 +37,8 @@ test('a submitted uploaded job offers rebinding after refresh and blocks replay 
     const html = renderToStaticMarkup(createElement(JobCard, { item, onOpen: () => {}, onEdit: () => {}, onStop: () => {}, onRetryPoll: () => {}, onRetryGeneration: () => {}, onRebindReference: async () => {} }))
     expect(html).toContain('重新绑定任务参考图')
     const replay = (html.match(/<button[^>]*>[\s\S]*?<\/button>/g) ?? []).find((button) => /按原(?:方案重新生成|请求继续提交)/.test(button))
-    expect(replay).toMatch(/(?:disabled=""|aria-disabled="true")/)
+    if (status === 'failed') expect(replay).toMatch(/(?:disabled=""|aria-disabled="true")/)
+    else expect(replay).not.toMatch(/(?:disabled=""|aria-disabled="true")/)
     expect(item.requestKey).toBe('key')
     expect(item.reference.id).toBe('private-ref')
   }

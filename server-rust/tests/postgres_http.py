@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Real PostgreSQL/HTTP ledger tests; local providers only, no production config."""
+import email.parser, email.policy
 import base64, concurrent.futures, io, hashlib, http.server, json, os, pathlib, re, secrets, shutil, socket, struct, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 BINARY=pathlib.Path(os.environ.get('JIANLAI_TEST_BINARY','/tmp/jianlai-pg-target/debug/image-workbench-server'))
@@ -31,13 +32,34 @@ GIF=gif()
 class Provider(http.server.BaseHTTPRequestHandler):
     active=0
     image_requests={}
+    edit_requests=[]
     video_polls=[]
     peak=0
     guard=threading.Lock()
     def log_message(self,*args):pass
     def do_POST(self):
-        value=json.loads(self.rfile.read(int(self.headers.get('Content-Length','0'))))
-        if self.path.endswith('/images/generations'):
+        body=self.rfile.read(int(self.headers.get('Content-Length','0')))
+        if self.path.endswith('/images/edits'):
+            message=email.parser.BytesParser(policy=email.policy.default).parsebytes(
+                b'Content-Type: '+self.headers['Content-Type'].encode()+b'\r\nMIME-Version: 1.0\r\n\r\n'+body)
+            assert message.is_multipart(),self.headers['Content-Type']
+            fields={};images=[];mask=None
+            for part in message.iter_parts():
+                name=part.get_param('name',header='content-disposition');data=part.get_payload(decode=True)
+                if name=='image[]':images.append(data)
+                elif name=='mask':mask=data
+                else:fields[name]=data.decode()
+            assert images,fields
+            with Provider.guard:
+                Provider.edit_requests.append({'fields':fields,'images':images,'mask':mask})
+                sequence=len(Provider.edit_requests)
+            animated='GIF_EDIT_TEST' in fields.get('prompt','')
+            if animated:
+                assert fields['model']=='gpt-image-2.6' and 'output_format' not in fields,fields
+            self.send_response(200)
+            result={'data':[{'b64_json':base64.b64encode(GIF if animated else png(160+sequence)).decode()}]}
+        elif self.path.endswith('/images/generations'):
+            value=json.loads(body)
             time.sleep(.7)
             if 'FAIL_TEST' in value.get('prompt',''): self.send_response(400);result={'error':{'message':'invalid prompt'}}
             else:
@@ -56,8 +78,10 @@ class Provider(http.server.BaseHTTPRequestHandler):
                         assert value['n']==1,value['n']
                     result={'data':[{'b64_json':base64.b64encode(GIF if 'GIF_TEST' in prompt and 'STATIC_GIF_TEST' not in prompt else png(c)).decode()} for c in colors]}
         elif self.path.endswith('/v2/video_generation'):
+            value=json.loads(body)
             self.send_response(200);result={'task_id':'mock-video'}
         elif self.path.endswith('/chat/completions'):
+            value=json.loads(body)
             if value.get('stream') is True:
                 messages=value['messages'];system='\n'.join(item['content'] for item in messages if item['role']=='system')
                 video='视频分镜创作助手' in system
@@ -94,19 +118,27 @@ class Provider(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         if not head:self.wfile.write(VIDEO_BYTES[start:end+1])
         return True
+    def stored_image(self, head=False):
+        if not self.path.startswith('/local-test/'):return False
+        key=self.path.split('?',1)[0].lstrip('/')
+        target='oss://mock-bucket/'+key
+        path=WORK/('object-'+hashlib.sha256(target.encode()).hexdigest())
+        data=path.read_bytes() if path.is_file() else PNG
+        mime='image/gif' if data.startswith(b'GIF8') else 'image/webp' if data[8:12]==b'WEBP' else 'image/png'
+        self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(len(data)));self.end_headers()
+        if not head:self.wfile.write(data)
+        return True
     def do_HEAD(self):
         if self.path.startswith('/private-video/'):
             self.send_response(403);self.end_headers();return
         if self.private_video(head=True):return
-        if self.path.startswith('/local-test/'):
-            self.send_response(200);self.send_header('Content-Type','image/png');self.send_header('Content-Length',str(len(PNG)));self.end_headers();return
+        if self.stored_image(head=True):return
         self.send_response(404);self.end_headers()
     def do_GET(self):
         if self.private_video():return
         if self.path.startswith('/local-test/expired-'):
             self.send_response(410);self.end_headers();return
-        if self.path.startswith('/local-test/'):
-            self.send_response(200);self.send_header('Content-Type','image/png');self.end_headers();self.wfile.write(PNG);return
+        if self.stored_image():return
         if self.path=='/mock.mp4':
             self.send_response(200);self.send_header('Content-Type','video/mp4');self.end_headers();self.wfile.write(b'\x00\x00\x00\x20ftypisom'+b'\0'*20);return
         with Provider.guard:
@@ -204,7 +236,7 @@ try:
     subprocess.check_call(['runuser','-u','postgres','--','createdb','-O',ROLE,DB],cwd='/tmp')
     PROVIDER=http.server.ThreadingHTTPServer(('127.0.0.1',0),Provider)
     threading.Thread(target=PROVIDER.serve_forever,daemon=True).start()
-    (WORK/'oss-mock').write_text('#!/usr/bin/env python3\nimport hashlib,json,pathlib,sys,time\nw=pathlib.Path('+repr(str(WORK))+')\nif (w/"slow-oss").exists():time.sleep(.5)\nwith (w/"oss-commands.jsonl").open("a") as f:f.write(json.dumps(sys.argv[1:])+"\\n")\nif "cp" in sys.argv:\n i=sys.argv.index("cp");p=pathlib.Path(sys.argv[i+1])\n if p.is_file():\n  with (w/"oss-copies.jsonl").open("a") as f:f.write(json.dumps({"target":sys.argv[i+2],"sha256":hashlib.sha256(p.read_bytes()).hexdigest(),"bytes":p.stat().st_size})+"\\n")\nif "presign" in sys.argv:print('+repr(f'http://127.0.0.1:{PROVIDER.server_port}/private-video/mock.mp4?signature=mock')+')\n');(WORK/'oss-mock').chmod(0o700)
+    (WORK/'oss-mock').write_text('#!/usr/bin/env python3\nimport hashlib,json,pathlib,sys,time\nw=pathlib.Path('+repr(str(WORK))+')\nif (w/"slow-oss").exists():time.sleep(.5)\nwith (w/"oss-commands.jsonl").open("a") as f:f.write(json.dumps(sys.argv[1:])+"\\n")\nif "cp" in sys.argv:\n i=sys.argv.index("cp");p=pathlib.Path(sys.argv[i+1])\n if p.is_file():\n  (w/("object-"+hashlib.sha256(sys.argv[i+2].encode()).hexdigest())).write_bytes(p.read_bytes())\n  with (w/"oss-copies.jsonl").open("a") as f:f.write(json.dumps({"target":sys.argv[i+2],"sha256":hashlib.sha256(p.read_bytes()).hexdigest(),"bytes":p.stat().st_size})+"\\n")\nif "presign" in sys.argv:print('+repr(f'http://127.0.0.1:{PROVIDER.server_port}/private-video/mock.mp4?signature=mock')+')\n');(WORK/'oss-mock').chmod(0o700)
     port,server=start(0);port2=port
     env={**os.environ,'JIANLAI_TEST_DATABASE_URL':f'postgresql://{ROLE}:{PASSWORD}@127.0.0.1/{DB}','CARGO_TARGET_DIR':os.environ.get('CARGO_TARGET_DIR','/tmp/jianlai-pg-target')}
     subprocess.check_call(['cargo','test','--locked','--quiet','--manifest-path',str(ROOT/'server-rust/Cargo.toml'),'postgres_statement_catalog','--','--ignored'],env=env)
@@ -388,6 +420,13 @@ try:
     assert psql(f"SELECT params IS NULL AND result IS NULL FROM jobs WHERE id='{sql_null_job}'")=='t'
     check('nullable legacy metadata renders user/admin history without rewriting SQL NULL')
 
+    # Admin image reads prefer the stored WebP preview. The OSS mock now
+    # preserves actual uploaded bytes instead of returning PNG for every key.
+    preview_url=psql(f"SELECT preview_url FROM stored_images WHERE job='{j['id']}' AND idx=0")
+    preview_key=preview_url.removeprefix(f'http://127.0.0.1:{PROVIDER.server_port}/')
+    preview_file=WORK/('object-'+hashlib.sha256(('oss://mock-bucket/'+preview_key).encode()).hexdigest())
+    admin_preview=preview_file.read_bytes()
+    assert admin_preview[:4]==b'RIFF' and admin_preview[8:12]==b'WEBP'
     for age in (8,13,14,15,29,30,31):
         created=int(time.time()*1000)-age*day
         psql(f"UPDATE stored_images SET created={created} WHERE job='{j['id']}'")
@@ -398,9 +437,9 @@ try:
         if records:
             assert records[0]['expiresAt']==created+30*day,(age,records)
             assert records[0]['hiddenUser']==(age>=14),(age,records)
-        code,original,_=req(port,prefix+f"/images/{j['id']}/0",cookie=admin)
+        code,original,headers=req(port,prefix+f"/images/{j['id']}/0",cookie=admin)
         assert code==(200 if age<30 else 404),(age,code)
-        if age<30:assert original==PNG
+        if age<30:assert original==admin_preview and headers['Content-Type']=='image/webp'
     check('administrator works/original reads retain images for 30 days; hiddenUser starts at 14 days')
     # A dead preview must not hide a retained readable original; if both remote
     # objects fail, use the retained local file without bypassing admin auth.
@@ -683,6 +722,7 @@ INSERT INTO video_jobs(id,account,request_key,fingerprint,status,phase,created,r
     history=req(port,'/api/history',cookie=c1)[1]['records']
     assert next(row for row in history if row['jobId']==created['id'])['type']=='image/gif'
     check('GIF HTTP delivery preserves original bytes/MIME/extension and actual metadata; duplicate request charges once and account isolation holds')
+    gif_job_id=created['id']
     static_request=payload(prompt='STATIC_GIF_TEST 循环动图')
     static_request['animation']={'fps':4,'durationSeconds':3,'frames':12}
     before=int(psql('SELECT balance FROM shared_ledger'))
@@ -694,6 +734,62 @@ INSERT INTO video_jobs(id,account,request_key,fingerprint,status,phase,created,r
     calls=[calls for prompt,calls in Provider.image_requests.items() if 'STATIC_GIF_TEST' in prompt]
     assert calls==[[1]],calls
     check('static fallback is delivered and billed once with an explicit warning and no automatic paid retry')
+
+    # Read the authenticated original, then feed each actual output into the
+    # next edit. Distinct bytes make stale-reference regressions observable.
+    def original_bytes(job,cookie=c1):
+        code,data,headers=req(port,f'/api/jobs/{job}/images/0',cookie=cookie)
+        assert code==200 and isinstance(data,bytes),(code,data)
+        return data,headers
+    before=int(psql('SELECT balance FROM shared_ledger'))
+    code,source,_=req(port,'/api/generate',payload(prompt='EDIT_CHAIN_SOURCE'),c1)
+    assert code==202,(code,source)
+    assert complete(port,source['id'],c1)['status']=='done'
+    reference,_=original_bytes(source['id'])
+    assert reference==PNG
+    assert req(port,f"/api/jobs/{source['id']}/images/0",cookie=c2)[0]==404
+    seen=[reference]
+    for step in (1,2):
+        edit=payload(prompt=f'EDIT_CHAIN_STEP_{step}')
+        edit['references']=['data:image/png;base64,'+base64.b64encode(reference).decode()]
+        code,created,_=req(port,'/api/generate',edit,c1);assert code==202,(code,created)
+        done=complete(port,created['id'],c1)
+        assert done['status']=='done' and done['charged']==.3,done
+        reference,headers=original_bytes(created['id'])
+        assert reference not in seen and headers.get_content_type()=='image/png'
+        received=Provider.edit_requests[-1]
+        assert received['images']==[seen[-1]] and received['mask'] is None,received
+        assert received['fields']['n']=='1',received['fields']
+        calls=len(Provider.edit_requests)
+        repeated=req(port,'/api/generate',edit,c1)
+        assert repeated[0]==200 and repeated[1]['id']==created['id'],repeated
+        assert len(Provider.edit_requests)==calls
+        seen.append(reference)
+    assert int(psql('SELECT balance FROM shared_ledger'))==before-90
+    check('authenticated original -> edit -> edit uses latest real bytes, charges one image per job and preserves request-key idempotency/account isolation')
+
+    # GIF editing uses its decoded first frame as a static reference to create
+    # a new animation; this deliberately does not claim frame-by-frame editing.
+    from PIL import Image
+    gif_bytes,headers=original_bytes(gif_job_id)
+    assert gif_bytes==GIF and headers.get_content_type()=='image/gif'
+    first_frame=io.BytesIO()
+    with Image.open(io.BytesIO(gif_bytes)) as animated:
+        animated.seek(0);animated.convert('RGBA').save(first_frame,format='PNG')
+    first_frame=first_frame.getvalue()
+    edit=payload(prompt='GIF_EDIT_TEST 首帧静态参考重新生成动图')
+    edit['references']=['data:image/png;base64,'+base64.b64encode(first_frame).decode()]
+    edit['animation']={'fps':4,'durationSeconds':3,'frames':12}
+    before=int(psql('SELECT balance FROM shared_ledger'))
+    code,created,_=req(port,'/api/generate',edit,c1);assert code==202,(code,created)
+    done=complete(port,created['id'],c1)
+    assert done['status']=='done' and done['charged']==.3 and done['error']=='',done
+    assert Provider.edit_requests[-1]['images']==[first_frame]
+    image=done['images'][0]
+    assert image['type']=='image/gif' and image['animation']=={'frames':12,'durationMs':3000,'fps':4.0,'width':8,'height':8},image
+    assert original_bytes(created['id'])[0]==GIF
+    assert int(psql('SELECT balance FROM shared_ledger'))==before-30
+    check('GIF authenticated bytes -> first-frame PNG reference -> newly generated GIF preserves animation metadata and single-image billing')
 
     print('PostgreSQL business HTTP integration: ALL PASSED',flush=True)
 except BaseException:

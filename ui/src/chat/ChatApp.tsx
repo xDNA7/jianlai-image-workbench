@@ -17,6 +17,9 @@ import type { View } from './Sidebar'
 import { SideDrawer, useMinWidth } from './SideDrawer'
 import { TemplatesPane } from './TemplatesPane'
 import type { ThreadActions } from './Thread'
+import { jobImageReferenceUrl } from './api'
+import { normalizeAnimation, recommendAnimation } from './animation'
+import type { AnimationMetadata, AnimationPlan } from './types'
 import type { Template } from './types'
 import type { Mark } from './marks'
 import { useWorkbench } from './useWorkbench'
@@ -72,13 +75,15 @@ export function ChatApp() {
   }
   // "修改这张图" opens the mark editor first; confirming brings the image (and
   // its marks) into the conversation as the reference for the next message.
-  const startEdit = (image: { download: string; preview: string; prompt: string }, marks: Mark[] = []) => {
+  const startEdit = (image: { download: string; preview: string; prompt: string; jobId?: string; index?: number; type?: string; animation?: AnimationMetadata; animationPlan?: AnimationPlan }, marks: Mark[] = []) => {
     setLightbox(null)
     setGalleryDrawer(false)
-    setAnnotating({ url: image.download, preview: image.preview, prompt: image.prompt, marks })
+    const animation = image.animationPlan ?? (image.type === 'image/gif' || /\.gif(?:[?#]|$)/i.test(image.download)
+      ? image.animation ? normalizeAnimation({ fps: image.animation.fps, durationSeconds: image.animation.durationMs / 1000 }, 'GIF') : recommendAnimation('GIF') : undefined)
+    setAnnotating({ url: image.jobId != null && image.index != null ? jobImageReferenceUrl(image.jobId, image.index) : image.download, preview: image.preview, prompt: image.prompt, marks, animation })
   }
   const confirmEdit = (target: AnnotateTarget, marks: Mark[]) => {
-    w.pin({ download: target.url, preview: target.preview, prompt: target.prompt }, marks)
+    w.pin({ download: target.url, preview: target.preview, prompt: target.prompt, animation: target.animation }, marks)
     setAnnotating(null)
     show('chat')
     setTimeout(() => textarea.current?.focus(), 50)
@@ -157,8 +162,8 @@ export function ChatApp() {
       {w.pinned ? (
         <div className="jl-pin">
           <img src={w.pinned.preview} alt="当前参考图" className="size-10 shrink-0 rounded-md object-cover" />
-          <span className="min-w-0 flex-1">下一条会修改这张图{w.pinned.marks.length ? `，已标记 ${w.pinned.marks.length} 处` : ''}</span>
-          <Button variant="secondary" size="xs" onClick={() => startEdit({ download: w.pinned!.url, preview: w.pinned!.preview, prompt: w.pinned!.prompt }, w.pinned!.marks)} leadingIcon={PencilIcon}>{w.pinned.marks.length ? '重新标记' : '标记位置'}</Button>
+          <span className="min-w-0 flex-1">{w.pinned.animation ? '使用 GIF 首帧作为参考，重新生成动图' : '下一条会修改这张图'}{w.pinned.marks.length ? `，已标记 ${w.pinned.marks.length} 处` : ''}</span>
+          <Button variant="secondary" size="xs" onClick={() => startEdit({ download: w.pinned!.url, preview: w.pinned!.preview, prompt: w.pinned!.prompt, animationPlan: w.pinned!.animation }, w.pinned!.marks)} leadingIcon={PencilIcon}>{w.pinned.marks.length ? '重新标记' : '标记位置'}</Button>
           <Button variant="ghost" size="xs" iconOnly leadingIcon={XIcon} aria-label="取消指定参考图" onClick={w.unpin} />
         </div>
       ) : null}

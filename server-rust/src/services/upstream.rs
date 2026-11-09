@@ -5,6 +5,7 @@ struct UpError {
     status: u16,
     retry: bool,
     key_unavailable: bool,
+    message: Option<&'static str>,
 }
 fn classify(status: u16, text: &str, invalid: bool) -> UpError {
     let policy = matches(
@@ -26,12 +27,23 @@ fn classify(status: u16, text: &str, invalid: bool) -> UpError {
     UpError {
         status,
         retry: !policy
+            && !invalid
             && (unavailable
                 || status >= 500
                 || [408, 409, 425, 429].contains(&status)
-                || invalid
                 || model_error),
         key_unavailable: unavailable,
+        message: None,
+    }
+}
+// A POST may already have been accepted. Unknown delivery or malformed success
+// must not trigger another paid generation on a different route.
+fn uncertain(status: u16) -> UpError {
+    UpError {
+        status,
+        retry: false,
+        key_unavailable: false,
+        message: Some("上游生成结果暂无法确认，已停止自动重试，请先检查作品记录"),
     }
 }
 pub async fn limited(
@@ -170,8 +182,8 @@ async fn attempt(
     found: &mut Vec<Vec<u8>>,
 ) -> std::result::Result<(), UpError> {
     let target = found.len() + count;
-    let mut with_mask = !strv(p, "mask").is_empty();
-    let response = loop {
+    let with_mask = !strv(p, "mask").is_empty();
+    let response = {
         let refs = p["references"].as_array();
         let edited = refs.is_some_and(|r| !r.is_empty());
         let url = format!(
@@ -231,16 +243,26 @@ async fn attempt(
         } else {
             request = request.json(&generation_body(p, model, count));
         }
-        let r = request
-            .send()
-            .await
-            .map_err(|_| classify(502, "network", false))?;
+        let r = request.send().await.map_err(|_| uncertain(502))?;
         let status = r.status().as_u16();
-        let raw = limited(r, 96 * 1024 * 1024)
-            .await
-            .map_err(|_| classify(502, "network", false))?;
-        let data: Value = serde_json::from_slice(&raw)
-            .map_err(|_| classify(status, "invalid json", status < 400))?;
+        // Keep oversized bodies distinct from genuine empty rejections. The
+        // shared media reader intentionally collapses oversize into empty bytes.
+        let mut stream = r.bytes_stream();
+        let mut raw = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| uncertain(502))?;
+            if raw.len() + chunk.len() > 96 * 1024 * 1024 {
+                return Err(uncertain(502));
+            }
+            raw.extend_from_slice(&chunk);
+        }
+        let data: Value = serde_json::from_slice(&raw).map_err(|_| {
+            if status >= 400 {
+                classify(status, "invalid json", false)
+            } else {
+                uncertain(502)
+            }
+        })?;
         if status >= 400 {
             let message = format!(
                 "{} {} {}",
@@ -255,25 +277,20 @@ async fn attempt(
                     &message,
                 )
             {
-                with_mask = false;
-                continue;
+                return Err(UpError {
+                    status,
+                    retry: false,
+                    key_unavailable: false,
+                    message: Some("当前模型不支持蒙版修改，已停止生成，未进行无蒙版重试"),
+                });
             }
             return Err(classify(status, &message, false));
         }
-        break data;
+        data
     };
-    let items = response["data"].as_array().ok_or_else(|| {
-        classify(
-            200,
-            &format!(
-                "{} {}",
-                strv(&response["error"], "code"),
-                strv(&response["error"], "message")
-            ),
-            true,
-        )
-    })?;
+    let items = response["data"].as_array().ok_or_else(|| uncertain(502))?;
     let mut valid = false;
+    let mut invalid = false;
     // A provider may repeat an earlier output before the new one. Bound parsing
     // by the supported batch size; the orchestrator caps unique deliveries.
     for item in items.iter().take(4) {
@@ -282,6 +299,7 @@ async fn attempt(
         }
         let bytes = if let Some(b64) = item["b64_json"].as_str() {
             if b64.len() > 45 * 1024 * 1024 {
+                invalid = true;
                 continue;
             }
             STANDARD.decode(b64).ok()
@@ -318,11 +336,17 @@ async fn attempt(
                     // Cancelling this attempt must not erase completed outputs.
                     found.push(bytes);
                 }
+            } else {
+                invalid = true;
             }
+        } else {
+            invalid = true;
         }
     }
-    if !valid {
-        return Err(classify(502, "invalid images", true));
+    // A short successful batch can be supplemented; a delivered item that
+    // cannot be recovered may already be billed and must not be regenerated.
+    if !valid || invalid {
+        return Err(uncertain(502));
     }
     Ok(())
 }
@@ -412,8 +436,12 @@ async fn generate_with_limits(
                             // at most count-1 such calls across the whole job.
                         }
                         Ok(Err(e)) => {
-                            last =
-                                Error(e.status, format!("生成服务未完成请求（HTTP {}）", e.status));
+                            last = Error(
+                                e.status,
+                                e.message.map(str::to_owned).unwrap_or_else(|| {
+                                    format!("生成服务未完成请求（HTTP {}）", e.status)
+                                }),
+                            );
                             if animated {
                                 return Err(last);
                             }
@@ -426,11 +454,11 @@ async fn generate_with_limits(
                             break;
                         }
                         Err(_) => {
-                            last = Error(504, "上游生成超时".into());
-                            if animated {
-                                return Err(last);
-                            }
-                            break;
+                            return Err(Error(
+                                504,
+                                "上游生成超时，结果暂无法确认，已停止自动重试，请先检查作品记录"
+                                    .into(),
+                            ));
                         }
                     }
                 }
@@ -492,6 +520,146 @@ mod tests {
         assert_eq!(seen.lock().unwrap().len(), 1);
         server.abort();
     }
+    fn edit_params() -> Value {
+        json!({
+            "count":1,
+            "prompt":"修改原图",
+            "size":"1024x1024",
+            "quality":"high",
+            "references":[format!("data:image/png;base64,{}", STANDARD.encode(test_png(11)))]
+        })
+    }
+    #[tokio::test]
+    async fn accepted_post_disconnect_or_invalid_success_never_resubmits() {
+        for params in [json!({"count":1}), edit_params()] {
+            for response in [
+                json!({"stub_disconnect":true}),
+                json!({"stub_invalid_json":true}),
+                json!({"error":{"message":"unexpected success body"}}),
+                json!({"data":[{"b64_json":"not an image"}]}),
+            ] {
+                let (app, seen, server) = stub(vec![(200, response), (200, output(&[2]))]).await;
+                let error = generate_detailed(&app, &params).await.err().unwrap();
+                assert!(error.1.contains("停止自动重试"));
+                assert_eq!(seen.lock().unwrap().len(), 1);
+                server.abort();
+            }
+        }
+    }
+    #[tokio::test]
+    async fn mixed_invalid_output_keeps_valid_image_without_supplement() {
+        for invalid in [
+            json!({"b64_json":"invalid base64"}),
+            json!({"url":"http://untrusted.example/image.png"}),
+            json!({"b64_json":STANDARD.encode(b"not an image")}),
+        ] {
+            let mut response = output(&[1]);
+            response["data"].as_array_mut().unwrap().push(invalid);
+            let (app, seen, server) = stub(vec![(200, response), (200, output(&[2]))]).await;
+            let result = generate_detailed(&app, &json!({"count":2})).await.unwrap();
+            assert_eq!(result.images, vec![test_png(1)]);
+            assert!(result.warning.contains("停止自动重试"));
+            assert_eq!(seen.lock().unwrap().len(), 1);
+            server.abort();
+        }
+    }
+    #[tokio::test]
+    async fn empty_http_rejection_preserves_fallback_and_status() {
+        for status in [429, 503] {
+            let (app, seen, server) = stub(vec![
+                (status, json!({"stub_empty":true})),
+                (200, output(&[2])),
+            ])
+            .await;
+            let result = generate_detailed(&app, &json!({"count":1})).await.unwrap();
+            assert_eq!(result.images, vec![test_png(2)]);
+            assert!(result.warning.is_empty());
+            let requests = seen.lock().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0]["model"], "model-a");
+            assert_eq!(requests[1]["model"], "model-b");
+            server.abort();
+        }
+        let (app, seen, server) = stub(vec![(401, json!({"stub_empty":true}))]).await;
+        let error = generate_detailed(&app, &json!({"count":1}))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.0, 401);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        server.abort();
+        let (app, seen, server) =
+            stub(vec![(200, json!({"stub_empty":true})), (200, output(&[2]))]).await;
+        let error = generate_detailed(&app, &json!({"count":1}))
+            .await
+            .err()
+            .unwrap();
+        assert!(error.1.contains("停止自动重试"));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        server.abort();
+    }
+    #[tokio::test]
+    async fn accepted_post_timeout_never_resubmits_generation_or_edit() {
+        for params in [json!({"count":1}), edit_params()] {
+            let (app, seen, server) = stub(vec![
+                (200, json!({"stub_delay_ms":1000,"data":[]})),
+                (200, output(&[2])),
+            ])
+            .await;
+            let error = generate_with_limits(
+                &app,
+                &params,
+                Duration::from_millis(40),
+                Duration::from_millis(500),
+            )
+            .await
+            .err()
+            .unwrap();
+            assert!(error.1.contains("超时"));
+            assert!(error.1.contains("停止自动重试"));
+            assert_eq!(seen.lock().unwrap().len(), 1);
+            server.abort();
+        }
+    }
+    #[tokio::test]
+    async fn unsupported_mask_does_not_resubmit_without_mask() {
+        let (app, seen, server) = stub(vec![
+            (400, json!({"error":{"message":"mask is not supported"}})),
+            (200, output(&[2])),
+        ])
+        .await;
+        let mut params = edit_params();
+        params["mask"] = json!(format!(
+            "data:image/png;base64,{}",
+            STANDARD.encode(test_png(12))
+        ));
+        let error = generate_detailed(&app, &params).await.err().unwrap();
+        assert_eq!(error.0, 400);
+        assert!(error.1.contains("不支持蒙版"));
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let multipart = STANDARD
+            .decode(requests[0]["multipart"].as_str().unwrap())
+            .unwrap();
+        let body = String::from_utf8_lossy(&multipart);
+        assert!(body.contains("name=\"mask\""));
+        assert!(body.contains("name=\"image[]\""));
+        server.abort();
+    }
+    #[tokio::test]
+    async fn disconnect_after_partial_batch_preserves_completed_output() {
+        let (app, seen, server) = stub(vec![
+            (200, output(&[1])),
+            (200, json!({"stub_disconnect":true})),
+            (200, output(&[2])),
+        ])
+        .await;
+        let result = generate_detailed(&app, &json!({"count":2})).await.unwrap();
+        assert_eq!(result.images, vec![test_png(1)]);
+        assert!(result.warning.contains("停止自动重试"));
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        server.abort();
+    }
     fn test_png(color: u8) -> Vec<u8> {
         let mut out = std::io::Cursor::new(Vec::new());
         image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
@@ -502,6 +670,37 @@ mod tests {
         .write_to(&mut out, image::ImageFormat::Png)
         .unwrap();
         out.into_inner()
+    }
+    async fn stub_reply(status: u16, value: Value) -> Response {
+        if let Some(delay) = value["stub_delay_ms"].as_u64() {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+        }
+        if value["stub_disconnect"] == true {
+            let chunks = futures_util::stream::iter(vec![
+                Ok(axum::body::Bytes::from_static(b"{\"data\":")),
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "stub disconnect",
+                )),
+            ]);
+            return Response::builder()
+                .status(status)
+                .body(Body::from_stream(chunks))
+                .unwrap();
+        }
+        if value["stub_empty"] == true {
+            return Response::builder()
+                .status(status)
+                .body(Body::empty())
+                .unwrap();
+        }
+        if value["stub_invalid_json"] == true {
+            return Response::builder()
+                .status(status)
+                .body(Body::from("invalid JSON"))
+                .unwrap();
+        }
+        reply(status, value)
     }
     async fn stub(
         replies: Vec<(u16, Value)>,
@@ -524,10 +723,7 @@ mod tests {
                             .unwrap()
                             .pop_front()
                             .unwrap_or((500, json!({})));
-                        if let Some(delay) = value["stub_delay_ms"].as_u64() {
-                            tokio::time::sleep(Duration::from_millis(delay)).await;
-                        }
-                        reply(status, value)
+                        stub_reply(status, value).await
                     }
                 }),
             )
@@ -546,7 +742,7 @@ mod tests {
                             .unwrap()
                             .pop_front()
                             .unwrap_or((500, json!({})));
-                        reply(status, value)
+                        stub_reply(status, value).await
                     }
                 }),
             );
@@ -676,7 +872,7 @@ mod tests {
     }
     #[tokio::test]
     async fn attempt_and_total_timeout_keep_completed_images() {
-        for (attempt, total, expected_requests) in [(40, 500, 3), (500, 40, 2)] {
+        for (attempt, total, expected_requests) in [(40, 500, 2), (500, 40, 2)] {
             let delayed = (200, json!({"stub_delay_ms":1000,"data":[]}));
             let (app, seen, server) =
                 stub(vec![(200, output(&[1])), delayed.clone(), delayed]).await;

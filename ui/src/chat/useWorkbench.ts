@@ -1,4 +1,4 @@
-import { recommendAnimation } from './animation'
+import { animationForEditedPrompt, explicitlyStatic, recommendAnimation } from './animation'
 import { getPublicFigureContext, getPublicFigureNames, validatePlanFigureSources } from './public-figures'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -17,7 +17,7 @@ import { useVideoAccess } from './useVideoAccess'
 import { referencePromptWithMarks, toApiAnnotations } from './marks'
 import type { Mark } from './marks'
 import type {
-  AssistantItem, GalleryRecord, JobItem, Plan, Reference, Template, ThreadItem, UserItem,
+  AnimationPlan, AssistantItem, GalleryRecord, JobItem, Plan, Reference, Template, ThreadItem, UserItem,
 } from './types'
 
 const POLL_MS = 1500
@@ -48,7 +48,7 @@ export function useWorkbench() {
   const [items, setItems] = useState<ThreadItem[]>([])
   const [replying, setReplying] = useState(false)
   const [favorites, setFavorites] = useState<string[]>(() => loadFavorites(storage()))
-  const [pinned, setPinned] = useState<{ url: string; preview: string; prompt: string; marks: Mark[] } | null>(null)
+  const [pinned, setPinned] = useState<{ url: string; preview: string; prompt: string; marks: Mark[]; animation?: AnimationPlan } | null>(null)
   const [templatesRequested, setTemplatesRequested] = useState(false)
   const [galleryRequested, setGalleryRequested] = useState(false)
   const [mine, setMine] = useState<Template[]>(() => loadPrivateTemplates(storage()))
@@ -262,7 +262,12 @@ export function useWorkbench() {
     submitting.current = true
     const itemId = previous?.id ?? uid()
     const wasUnknown = previous?.status === 'unknown'
-    let requestKey = previous?.status === 'unknown' ? previous.requestKey : newRequestKey()
+    // An unknown request must retain the exact submitted payload and identity.
+    if (!wasUnknown && plan.useReference && !plan.animation && reference && reference.kind !== 'upload' && !explicitlyStatic(plan.prompt)) {
+      const animation = reference.animation ?? (/\.gif(?:[?#]|$)/i.test(reference.url) ? recommendAnimation('GIF') : undefined)
+      if (animation) plan = { ...plan, animation }
+    }
+    let requestKey = previous && !previous.jobId ? previous.requestKey : newRequestKey()
     stopped.current.delete(itemId)
     const job: JobItem = {
       type: 'job', id: itemId, requestKey, plan, reference, status: 'submitting',
@@ -272,12 +277,14 @@ export function useWorkbench() {
     let rejected = false
     let submitted = false
     try {
-      if (wasUnknown && validatePlanFigureSources(plan).some(source => source.provider === 'Sogou/Sina')) {
+      if (wasUnknown) {
         try {
           const recovered = await findJobByRequestKey(requestKey, plan.prompt, plan.text)
           if (stopped.current.has(itemId) || !alive.current) return
-          patch<JobItem>(itemId, (i) => ({ ...i, jobId: recovered.id, status: 'running', phase: recovered.phase }))
-          void pollJob(itemId, recovered.id, plan.prompt, plan.text)
+          if (recovered.availableCents != null) setBalance(recovered.availableCents)
+          patch<JobItem>(itemId, (i) => ({ ...i, jobId: recovered.id, status: recovered.status, phase: recovered.status === 'running' ? recovered.phase : recovered.status, images: recovered.images, chargedCents: recovered.chargedCents, error: recovered.error }))
+          if (recovered.status === 'running') void pollJob(itemId, recovered.id, plan.prompt, plan.text)
+          else await queryClient.invalidateQueries({ queryKey: ['history', 'gallery', accountId], exact: true })
           return
         } catch (error) {
           if (!(error instanceof ApiError && error.status === 404)) throw error
@@ -334,7 +341,7 @@ export function useWorkbench() {
     } finally {
       submitting.current = false
     }
-  }, [patch, pollJob])
+  }, [accountId, patch, pollJob, queryClient, setBalance])
 
   useEffect(() => {
     if (!ready) return
@@ -397,8 +404,9 @@ export function useWorkbench() {
       reference = { kind: 'upload', id: upload.id, name: upload.name, preview: upload.dataUrl }
     } else if (pinned) {
       // A reference exists only when the user uploaded one or picked an image to edit.
-      reference = { kind: 'picked', url: pinned.url, preview: pinned.preview, prompt: pinned.prompt, marks: pinned.marks }
+      reference = { kind: 'picked', url: pinned.url, preview: pinned.preview, prompt: pinned.prompt, marks: pinned.marks, animation: pinned.animation }
     }
+    const referenceAnimation = reference && reference.kind !== 'upload' ? animationForEditedPrompt(reference.animation, clean) : undefined
     const created = Date.now()
     const userItem: UserItem = { type: 'user', id: uid(), text: clean, reference: upload ? reference : undefined, created }
     const replyItem: AssistantItem = {
@@ -415,7 +423,7 @@ export function useWorkbench() {
         {
           messages: toChatMessages(history),
           reference: reference
-            ? { prompt: reference.kind === 'upload' ? '用户本次新上传的参考照片。仅以本次上传图片为准，不沿用此前生成图片、人物或场景。' : referencePromptWithMarks(reference.prompt ?? '', reference.marks) }
+            ? { prompt: reference.kind === 'upload' ? '用户本次新上传的参考照片。仅以本次上传图片为准，不沿用此前生成图片、人物或场景。' : referencePromptWithMarks(reference.prompt ?? '', reference.marks) + (referenceAnimation ? `。使用 GIF 首帧作参考，重新生成循环 GIF，目标 ${referenceAnimation.frames} 帧 / 4 fps / ${referenceAnimation.durationSeconds} 秒。` : '') }
             : undefined,
         },
         {
@@ -424,7 +432,7 @@ export function useWorkbench() {
           onPlan: (plan) => patch<AssistantItem>(replyItem.id, (i) => ({
             ...i,
             planState: 'open',
-            plan: reference && plan.useReference ? { ...plan, count: 1 } : { ...plan, useReference: false },
+            plan: reference && plan.useReference ? { ...plan, count: 1, animation: reference.kind !== 'upload' ? animationForEditedPrompt(reference.animation ?? plan.animation, clean) : plan.animation } : { ...plan, useReference: false },
           })),
         },
         controller.signal,
@@ -510,8 +518,8 @@ export function useWorkbench() {
     if (boot) clearThread(boot.accountId, storage())
   }, [boot])
 
-  const pin = useCallback((r: { download: string; preview: string; prompt: string }, marks: Mark[] = []) => {
-    setPinned({ url: r.download, preview: r.preview, prompt: r.prompt, marks })
+  const pin = useCallback((r: { download: string; preview: string; prompt: string; animation?: AnimationPlan }, marks: Mark[] = []) => {
+    setPinned({ url: r.download, preview: r.preview, prompt: r.prompt, marks, animation: r.animation })
   }, [])
   const unpin = useCallback(() => setPinned(null), [])
 

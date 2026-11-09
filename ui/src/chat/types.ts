@@ -22,7 +22,7 @@ export type Plan = {
 export type PublicFigureSource = { provider?: string; title: string; thumbUrl: string; imageUrl: string; sourceUrl: string; artist: string; license: string; licenseUrl?: string; entityId?: string; personName?: string }
 
 export type Reference =
-  | { kind: 'picked' | 'previous'; url: string; preview: string; prompt: string; marks?: Mark[]; source?: PublicFigureSource }
+  | { kind: 'picked' | 'previous'; url: string; preview: string; prompt: string; marks?: Mark[]; source?: PublicFigureSource; animation?: AnimationPlan }
   | { kind: 'upload'; id: string; name: string; preview: string }
 
 export type JobImage = {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
-import { fileToDataUrl, imageToDataUrl, request } from '../src/chat/api'
+import { fileToDataUrl, imageToDataUrl, jobImageReferenceUrl, request } from '../src/chat/api'
 const originals = new Map<string, PropertyDescriptor | undefined>()
 function replace(name: string, value: unknown) {
   if (!originals.has(name)) originals.set(name, Object.getOwnPropertyDescriptor(globalThis, name))
@@ -105,7 +105,7 @@ describe('upload validation', () => {
 })
 describe('same-origin references', () => {
   const job = 'a'.repeat(32), account = 'b'.repeat(64)
-  const prefix = 'https://public-assets.example'
+  const prefix = 'https://actual-production-oss.example'
   test('maps known originals only', async () => {
     reader()
     const fetcher = mock(async () => new Response(new Blob([png], { type: 'image/png' })))
@@ -113,12 +113,11 @@ describe('same-origin references', () => {
     await imageToDataUrl(`${prefix}/jianlai/results/originals/${account}/${job}-1.png?signature=fixture`)
     expect(fetcher.mock.calls[0]?.[0]).toBe(`/jianlai/api/jobs/${job}/images/1`)
   })
-  test('does not map foreign hosts, previews, malformed keys, data or blob', async () => {
+  test('does not map previews, malformed keys, data or blob', async () => {
     reader()
     const fetcher = mock(async () => new Response(new Blob([png], { type: 'image/png' })))
     replace('fetch', fetcher)
     for (const url of [
-      `https://other.example/jianlai/results/originals/${account}/${job}-0.png`,
       `${prefix}/jianlai/results/previews/${account}/${job}-0.webp`,
       `${prefix}/jianlai/results/originals/${account}/not-a-job-0.png`,
       'data:image/png;base64,test', 'blob:fixture',
@@ -126,6 +125,37 @@ describe('same-origin references', () => {
       await imageToDataUrl(url)
       expect(fetcher.mock.calls.at(-1)?.[0]).toBe(url)
     }
+  })
+  test('constructs own references and rejects invalid identities', () => {
+    expect(jobImageReferenceUrl(job, 2)).toBe(`/jianlai/api/jobs/${job}/images/2`)
+    expect(() => jobImageReferenceUrl('invalid', 0)).toThrow('标识')
+    expect(() => jobImageReferenceUrl(job, -1)).toThrow('标识')
+  })
+  for (const status of [403, 404]) test(`does not bypass authenticated ${status}`, async () => {
+    const fetcher = mock(async () => new Response('', { status }))
+    replace('fetch', fetcher)
+    await expect(imageToDataUrl(`${prefix}/jianlai/results/originals/${account}/${job}-0.gif`)).rejects.toMatchObject({ status })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(fetcher.mock.calls[0]?.[0]).toBe(`/jianlai/api/jobs/${job}/images/0`)
+  })
+  test('translates reference network failures', async () => {
+    replace('fetch', async () => { throw new TypeError('Failed to fetch') })
+    await expect(imageToDataUrl(jobImageReferenceUrl(job, 0))).rejects.toThrow('无法读取参考图，请重试或重新上传')
+  })
+  test('translates stream network failures', async () => {
+    replace('fetch', async () => new Response(new ReadableStream({ start(controller) { controller.error(new TypeError('Failed to fetch')) } })))
+    await expect(imageToDataUrl(jobImageReferenceUrl(job, 0))).rejects.toThrow('无法读取参考图，请重试或重新上传')
+  })
+  test('accepts only generated GIF and converts it to PNG', async () => {
+    reader()
+    const gif = new Uint8Array([71, 73, 70, 56, 57, 97, 20, 0, 20, 0, 0, 0])
+    replace('fetch', async () => new Response(gif, { headers: { 'content-type': 'image/gif' } }))
+    const drawImage = mock(() => {})
+    replace('document', { createElement: () => ({ getContext: () => ({ drawImage }), toBlob: (cb: (b: Blob) => void, type: string) => { expect(type).toBe('image/png'); cb(new Blob([png], { type })) } }) })
+    expect(await imageToDataUrl(jobImageReferenceUrl(job, 0))).toStartWith('data:image/png')
+    expect(drawImage).toHaveBeenCalledTimes(1)
+    await expect(imageToDataUrl('https://upload.wikimedia.org/external.gif')).rejects.toThrow('格式')
+    await expect(fileToDataUrl(new File([gif], 'upload.gif', { type: 'image/gif' }))).rejects.toThrow('PNG')
   })
   test('keeps Commons proxy routing', async () => {
     reader()

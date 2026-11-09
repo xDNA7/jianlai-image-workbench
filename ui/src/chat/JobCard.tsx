@@ -44,7 +44,7 @@ export function JobCard({ item, onStop, onRetryPoll, onRetryGeneration, onRebind
         <div className="grid gap-2">
           {item.plan.useReference && item.reference?.kind === 'upload' ? (
             <label className="grid gap-1">
-              {missingReference ? '刷新后请重新绑定原参考图，再重试此任务。' : '参考图已绑定，可继续原任务。'}
+              {missingReference ? item.status === 'unknown' ? '可先查询原任务；仅在任务不存在时需要重新绑定参考图。' : '刷新后请重新绑定原参考图，再重试此任务。' : '参考图已绑定，可继续原任务。'}
               <input type="file" accept="image/png,image/jpeg,image/webp" aria-label="重新绑定任务参考图" disabled={binding} onChange={async (event) => {
                 const file = event.target.files?.[0]
                 event.target.value = ''
@@ -59,7 +59,7 @@ export function JobCard({ item, onStop, onRetryPoll, onRetryGeneration, onRebind
               {bindingError ? <span>{bindingError}</span> : null}
             </label>
           ) : null}
-          <span>{item.error || '生成失败，费用状态未知，请到画廊核对任务'}</span><span className="text-sm text-muted-foreground">{item.status === 'failed' && item.phase === 'failed' && item.chargedCents != null ? `服务端确认失败 · ${item.chargedCents === 0 ? '未扣费 · ' : ''}实际费用 ${yuan(item.chargedCents)}` : '最终状态和费用待确认，请先核对原任务。'}</span>{item.jobId ? <Button variant="secondary" size="xs" onClick={onRetryPoll}>继续查询</Button> : null}{!item.jobId ? <Button variant="secondary" size="xs" disabled={binding || missingReference} onClick={onRetryGeneration}>按原请求继续提交</Button> : null}{item.jobId && item.status === 'failed' && item.phase === 'failed' ? <Button variant="secondary" size="xs" disabled={binding || missingReference} onClick={onRetryGeneration}>按原方案重新生成</Button> : null}</div>
+          <span>{item.error || '生成失败，费用状态未知，请到画廊核对任务'}</span><span className="text-sm text-muted-foreground">{item.status === 'failed' && item.phase === 'failed' && item.chargedCents != null ? `${item.jobId ? '服务端确认失败' : '未创建生成任务'} · ${item.chargedCents === 0 ? '未扣费 · ' : ''}实际费用 ${yuan(item.chargedCents)}` : '最终状态和费用待确认，请先核对原任务。'}</span>{item.jobId ? <Button variant="secondary" size="xs" onClick={onRetryPoll}>继续查询</Button> : null}{!item.jobId ? <Button variant="secondary" size="xs" disabled={binding || (missingReference && item.status !== 'unknown')} onClick={onRetryGeneration}>按原请求继续提交</Button> : null}{item.jobId && item.status === 'failed' && item.phase === 'failed' ? <Button variant="secondary" size="xs" disabled={binding || missingReference} onClick={onRetryGeneration}>按原方案重新生成</Button> : null}</div>
       </div>
     )
   }

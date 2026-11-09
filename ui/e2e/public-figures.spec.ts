@@ -322,6 +322,9 @@ test('clearing a thread ignores a late identity search and keeps the next contex
 
 test('an accepted request with a lost response stays unknown when retry image loading fails and keeps its original key', async ({ page }) => {
   const mock = await install(page)
+  // Exercise the not-yet-discoverable branch: only a lookup 404 permits preparing
+  // references and replaying the same key; acceptedJobs still deduplicates it.
+  await page.route('**/api/jobs/by-request?**', route => json(route, { error: '任务暂未查到' }, 404))
   mock.loseFirstGenerateResponse = true
   await ready(page)
   await confirm(page).click()
