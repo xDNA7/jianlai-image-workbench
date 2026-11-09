@@ -35,6 +35,9 @@ async function fixture(page: Page, items: unknown[], activeJobId?: string, activ
       if (rejectionStatus) { await route.fulfill({ status: rejectionStatus, contentType: 'application/json', body: JSON.stringify({ error: '请求被明确拒绝' }) }); return }
       body = { id: `new-job${generates === 1 ? '' : `-${generates}`}`, status: 'running' }
     }
+    else if (path.endsWith('/jobs/by-request')) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: '任务不存在' }) }); return
+    }
     else if (path.includes('/jobs/new-job-')) body = { id: path.split('/').at(-1), status: 'done', charged: .3, availableCents: 4970, images: [{ index: 0, url: '/fixture.png', previewUrl: '/fixture.png', downloadUrl: '/fixture.png' }] }
     else if (path.includes('/jobs/')) {
       const jobStatus = path.endsWith('/new-job') ? generatedStatus : status
@@ -156,7 +159,18 @@ for (const result of ['failed', 'unknown'] as const) {
     const retry = result === 'failed' ? '按原方案重新生成' : '按原请求继续提交'
     await expect(page.getByRole('button', { name: retry })).toBeVisible()
     await page.reload()
-    await expect(page.getByRole('button', { name: retry })).toBeDisabled()
+    if (result === 'failed') await expect(page.getByRole('button', { name: retry })).toBeDisabled()
+    else {
+      await expect(page.getByRole('button', { name: retry })).toBeEnabled()
+      await page.getByRole('button', { name: retry }).click()
+      await expect(page.getByRole('alert')).toContainText('原请求结果仍未知')
+      await expect(page.getByRole('alert')).toContainText('参考图已失效，请重新上传')
+      expect(f.generates()).toBe(1)
+      await expect.poll(async () => page.evaluate(() => {
+        const items = JSON.parse(localStorage.getItem('jianlai-chat:v1:state-account') || '[]')
+        return items.filter((item: { type: string }) => item.type === 'job').map((item: { status: string; requestKey: string }) => ({ status: item.status, requestKey: item.requestKey }))
+      })).toEqual([{ status: 'unknown', requestKey: f.requestKeys[0] }])
+    }
     await page.getByLabel('重新绑定任务参考图').setInputFiles(file)
     await expect(page.getByRole('button', { name: retry })).toBeEnabled()
     if (result === 'unknown') f.setGeneratedStatus('done')
@@ -174,18 +188,19 @@ for (const result of ['failed', 'unknown'] as const) {
 }
 
 
-test('a confirmed HTTP rejection is uncharged and retries with a fresh key', async ({ page }) => {
+test('a confirmed HTTP rejection creates no task and retries with its original key', async ({ page }) => {
   const f = await fixture(page, [proposal])
   f.setRejectionStatus(413)
   await page.goto('/')
   await page.getByRole('region', { name: '生成方案' }).getByRole('button', { name: '生成', exact: true }).click()
-  await expect(page.getByRole('alert')).toContainText('服务端确认失败')
+  await expect(page.getByRole('alert')).toContainText('未创建生成任务')
+  await expect(page.getByRole('alert')).not.toContainText('服务端确认失败')
   await expect(page.getByRole('alert')).toContainText('未扣费')
   f.setRejectionStatus(0)
   await page.getByRole('button', { name: '按原请求继续提交' }).click()
   await expect.poll(f.generates).toBe(2)
   await expect(page.getByText(/已完成 · 1 张/)).toBeVisible()
-  expect(f.requestKeys[0]).not.toBe(f.requestKeys[1])
+  expect(f.requestKeys[0]).toBe(f.requestKeys[1])
 })
 
 
