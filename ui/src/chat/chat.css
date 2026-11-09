@@ -49,6 +49,7 @@
 .jl-assistant-identity strong {font-weight:600}
 .jl-assistant-identity>span {font-size:.75rem; color:var(--text-secondary); margin-left:2px}
 .jl-assistant-text [data-slot=bubble-content] {font-size:1rem; line-height:1.75rem; padding:0; border:0; box-shadow:none}
+.jl-chat-waiting {display:flex; align-items:center; gap:8px; min-height:28px; color:var(--text-secondary); font-size:.875rem; line-height:1.5rem}
 .jl-user-bubble {max-width:84%}
 .jl-user-bubble [data-slot=bubble-content] {font-size:1rem; line-height:1.75rem; padding:12px 18px; background:var(--surface-canvas); border:0; border-radius:20px 20px 4px 20px; box-shadow:none}
 .jl-job-message {max-width:100%}

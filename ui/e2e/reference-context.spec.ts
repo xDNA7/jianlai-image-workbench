@@ -263,3 +263,92 @@ test('reference read failure creates no task and shows the true client failure s
   await expect(page.getByRole('alert')).not.toContainText('服务端确认失败')
   expect(mock.generates).toHaveLength(1)
 })
+
+test('an uploaded reference cannot be disabled by the chat model', async ({ page }) => {
+  const mock = await install(page)
+  await page.goto('/')
+  await generateAndPin(page)
+  const bytes = await upload(page)
+  mock.useReference = false
+  await send(page, '把本次上传照片改为黏土风格')
+  await expect(latestPlan(page).getByRole('img', { name: '本次方案参考图' })).toHaveAttribute('src', bytes)
+  await latestPlan(page).getByRole('button', { name: '生成', exact: true }).click()
+  await expect.poll(() => mock.generates.length).toBe(2)
+  expect(mock.generates[1]).toMatchObject({ mode: 'edit', references: [bytes] })
+  expect(mock.chats[1].messages).toEqual([{ role: 'user', content: '把本次上传照片改为黏土风格' }])
+})
+
+test('plain-text edits automatically use the latest output, including after refresh', async ({ page }) => {
+  const mock = await install(page)
+  await page.goto('/')
+  await send(page, '请画旧的江南小镇')
+  await latestPlan(page).getByRole('button', { name: '生成', exact: true }).click()
+  await expect(page.getByText(/已完成 · 1 张/)).toHaveCount(1)
+  const reads: string[] = []
+  await page.route('**/api/jobs/*/images/0', route => {
+    reads.push(new URL(route.request().url()).pathname)
+    return route.fulfill({ contentType: 'image/png', body: PNG })
+  })
+  for (let round = 0; round < 2; round++) {
+    if (round) await page.reload()
+    await send(page, '把上一张的灯笼改成蓝色')
+    expect(mock.chats.at(-1)?.reference?.prompt).toBeTruthy()
+    await latestPlan(page).getByRole('button', { name: '生成', exact: true }).click()
+    await expect(page.getByText(/已完成 · 1 张/)).toHaveCount(round + 2)
+    expect(reads[round]).toBe(`/jianlai/api/jobs/${String(round + 1).padStart(32, '0')}/images/0`)
+    expect(mock.generates.at(-1)?.references).toEqual([`data:image/png;base64,${PNG.toString('base64')}`])
+  }
+})
+
+test('explicit new creation drops a pinned old image and preserves its boundary after reload', async ({ page }) => {
+  const mock = await install(page)
+  await page.goto('/')
+  await generateAndPin(page)
+  mock.useReference = true
+  await send(page, '生成一张新图：蓝色海边的鲸鱼')
+  expect(mock.chats.at(-1)?.reference).toBeUndefined()
+  expect(mock.chats.at(-1)?.messages).toEqual([{ role: 'user', content: '生成一张新图：蓝色海边的鲸鱼' }])
+  await latestPlan(page).getByRole('button', { name: '生成', exact: true }).click()
+  await expect(page.getByText(/已完成 · 1 张/)).toHaveCount(2)
+  expect(mock.generates[1].references).toEqual([])
+  await page.reload()
+  await send(page, '把鲸鱼改为粉色')
+  expect(JSON.stringify(mock.chats.at(-1)?.messages)).not.toContain('江南小镇')
+  expect(mock.chats.at(-1)?.reference?.prompt).not.toContain(OLD_PROMPT)
+})
+
+test('independent creation details cannot re-enable old images or override explicit no-reference', async ({ page }) => {
+  const mock = await install(page)
+  await page.goto('/')
+  await generateAndPin(page)
+  mock.useReference = true
+  await send(page, '生成一张新海报，添加标题：春日')
+  expect(mock.chats.at(-1)?.reference).toBeUndefined()
+  expect(mock.chats.at(-1)?.messages).toEqual([{ role: 'user', content: '生成一张新海报，添加标题：春日' }])
+  await upload(page)
+  await send(page, '不要用参考图，生成一只猫')
+  expect(mock.chats.at(-1)?.reference).toBeUndefined()
+  await latestPlan(page).getByRole('button', { name: '生成', exact: true }).click()
+  await expect(mock.generates).toHaveLength(2)
+  expect(mock.generates.at(-1)?.references).toEqual([])
+})
+
+test('a newly picked older work stays selected through follow-up before generation', async ({ page }) => {
+  const mock = await install(page)
+  await page.goto('/')
+  await send(page, '画一张江南小镇')
+  await latestPlan(page).getByRole('button', { name: '生成', exact: true }).click()
+  await expect(page.getByText(/已完成 · 1 张/)).toHaveCount(1)
+  await send(page, '生成一张新图：雪山')
+  await latestPlan(page).getByRole('button', { name: '生成', exact: true }).click()
+  await expect(page.getByText(/已完成 · 1 张/)).toHaveCount(2)
+  await page.getByRole('button', { name: '修改这张图' }).first().click()
+  await page.getByRole('dialog').getByRole('button', { name: '不标记，直接带入对话' }).click()
+  await send(page, '把背景改成蓝色')
+  await send(page, '再亮一点')
+  expect(mock.chats.at(-1)?.reference?.prompt).toContain(OLD_PROMPT)
+  expect(JSON.stringify(mock.chats.at(-1)?.messages)).not.toContain('雪山')
+  await latestPlan(page).getByRole('button', { name: '生成', exact: true }).click()
+  await expect(page.getByText(/已完成 · 1 张/)).toHaveCount(3)
+  expect(mock.generates.at(-1)?.references).toEqual([`data:image/png;base64,${PNG.toString('base64')}`])
+})

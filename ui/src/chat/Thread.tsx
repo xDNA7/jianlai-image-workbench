@@ -27,11 +27,12 @@ export type ThreadActions = {
   onEdit: (image: JobImage) => void
 }
 
-function Dots() {
+function WaitingIndicator({ hasText }: { hasText: boolean }) {
   return (
-    <span className="chat-dots" role="status" aria-label="正在思考">
-      <span /><span /><span />
-    </span>
+    <div className="jl-chat-waiting" role="status" aria-live="polite" aria-atomic="true">
+      <span className="chat-dots" aria-hidden="true"><span /><span /><span /></span>
+      <span>{hasText ? '正在整理生成方案' : '正在理解需求'}</span>
+    </div>
   )
 }
 
@@ -48,13 +49,14 @@ function AssistantMessage({ item, a }: { item: AssistantItem; a: ThreadActions }
     <Message align="start" className="jl-ai-message">
       <Avatar />
       <MessageContent className="gap-3">
-        {showText || (item.text === '' && item.status === 'streaming') ? (
+        {showText ? (
           <Bubble variant="ghost" className="jl-assistant-text max-w-full">
             <BubbleContent className="whitespace-pre-wrap px-3 py-2 leading-relaxed">
-              {showText ? visible : <Dots />}
+              {visible}
             </BubbleContent>
           </Bubble>
         ) : null}
+        {item.status === 'streaming' && !item.plan ? <WaitingIndicator hasText={item.text.trim().length > 0} /> : null}
         {item.plan && done ? (
           <PlanCard
             item={item as AssistantItem & { plan: Plan }}

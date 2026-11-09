@@ -13,6 +13,7 @@ import {
 } from './store'
 import type { FavoriteTarget } from './store'
 import { completedVideos } from './media-gallery'
+import { imageIntent, previousReference, withoutReference } from './context'
 import { useVideoAccess } from './useVideoAccess'
 import { referencePromptWithMarks, toApiAnnotations } from './marks'
 import type { Mark } from './marks'
@@ -398,17 +399,20 @@ export function useWorkbench() {
   const send = useCallback(async (text: string, upload?: Upload) => {
     const clean = text.trim()
     if (!clean || replying) return
+    const intent = imageIntent(clean)
     let reference: Reference | undefined
     if (upload) {
       uploads.current.set(upload.id, upload.dataUrl)
       reference = { kind: 'upload', id: upload.id, name: upload.name, preview: upload.dataUrl }
-    } else if (pinned) {
-      // A reference exists only when the user uploaded one or picked an image to edit.
+    } else if (pinned && intent !== 'new') {
       reference = { kind: 'picked', url: pinned.url, preview: pinned.preview, prompt: pinned.prompt, marks: pinned.marks, animation: pinned.animation }
+    } else if (intent !== 'new') {
+      reference = previousReference(itemsRef.current)
     }
+    if (withoutReference(clean)) reference = undefined
     const referenceAnimation = reference && reference.kind !== 'upload' ? animationForEditedPrompt(reference.animation, clean) : undefined
     const created = Date.now()
-    const userItem: UserItem = { type: 'user', id: uid(), text: clean, reference: upload ? reference : undefined, created }
+    const userItem: UserItem = { type: 'user', id: uid(), text: clean, reference: upload ? reference : undefined, contextStart: Boolean(upload || pinned) || intent === 'new', created }
     const replyItem: AssistantItem = {
       type: 'assistant', id: uid(), text: '', status: 'streaming', source: clean, reference, created,
     }
@@ -432,7 +436,7 @@ export function useWorkbench() {
           onPlan: (plan) => patch<AssistantItem>(replyItem.id, (i) => ({
             ...i,
             planState: 'open',
-            plan: reference && plan.useReference ? { ...plan, count: 1, animation: reference.kind !== 'upload' ? animationForEditedPrompt(reference.animation ?? plan.animation, clean) : plan.animation } : { ...plan, useReference: false },
+            plan: reference ? { ...plan, useReference: true, count: 1, animation: reference.kind !== 'upload' ? animationForEditedPrompt(reference.animation ?? plan.animation, clean) : plan.animation } : { ...plan, useReference: false },
           })),
         },
         controller.signal,

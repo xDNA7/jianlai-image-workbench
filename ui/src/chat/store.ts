@@ -1,4 +1,5 @@
 import type { JobItem, Reference, Template, ThreadItem } from './types'
+import { briefStart } from './context'
 
 export const THREAD_LIMIT = 200
 const PREFIX = 'jianlai-chat:v1:'
@@ -100,14 +101,10 @@ export function saveFavorites(ids: string[], storage: StorageLike) {
 
 export type ChatMessage = { role: 'user' | 'assistant'; content: string }
 
-/** New uploads start a separate image brief while keeping visible history intact. */
+/** Keep visible history while sending only the current image brief. */
 export function toChatMessages(items: ThreadItem[]): ChatMessage[] {
   const out: ChatMessage[] = []
-  let start = 0
-  for (let index = 0; index < items.length; index += 1) {
-    const item = items[index]
-    if (item.type === 'user' && item.reference?.kind === 'upload') start = index
-  }
+  const start = briefStart(items)
   for (const item of items.slice(start)) {
     if (item.type === 'user' && item.text.trim()) out.push({ role: 'user', content: item.text })
     else if (item.type === 'assistant' && item.status === 'done' && item.text.trim()) {

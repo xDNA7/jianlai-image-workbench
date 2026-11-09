@@ -180,7 +180,7 @@ pub fn build_messages(input: &Value) -> Result<Vec<Value>> {
         let short: String = reference.chars().take(MESSAGE_MAX_CHARS).collect();
         out.push(json!({
             "role": "system",
-            "content": format!("当前可作为参考的上一张图，其画面描述是：{short}"),
+            "content": format!("本轮已指定的参考图，其说明是：{short}。以本轮参考为准，不要用历史作品替换。你只收到参考说明，未收到图片像素，不要猜测图中人物或物体；生成方案时保留本轮参考。"),
         }));
     }
     out.extend(turns.into_iter().skip(skip));
@@ -677,6 +677,14 @@ mod tests {
         let input = json!({"messages": list, "reference": {"prompt": "雾中水乡"}});
         let with_ref = build_messages(&input).unwrap();
         assert_eq!(with_ref.len(), 2 + HISTORY_LIMIT);
+        assert!(with_ref[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("本轮已指定的参考图"));
+        assert!(!with_ref[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("上一张图"));
     }
 
     #[test]

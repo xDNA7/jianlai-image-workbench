@@ -43,6 +43,7 @@ export type UserItem = {
   id: string
   text: string
   reference?: Reference
+  contextStart?: boolean
   created: number
 }
 
