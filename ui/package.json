@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "build": "bun run check:toolchain && react-router build && node scripts/export-client.mjs",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "VITE_APP_BASE=/jianlai/ VITE_PUBLIC_ASSET_BASE=https://public-assets.example/ bun test tests/*.test.ts",
+    "test": "VITE_APP_BASE=/jianlai/ bun test tests/*.test.ts",
     "test:e2e": "playwright test",
     "api:types": "openapi-typescript ../docs/openapi.yaml -o src/api/generated.ts",
     "lint": "eslint src app e2e scripts",

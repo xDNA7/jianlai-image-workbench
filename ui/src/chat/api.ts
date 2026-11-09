@@ -18,8 +18,6 @@ function errorMessage(value: unknown, fallback: string): string {
   return typeof message === 'string' && message.trim() ? message : fallback
 }
 
-const assetBase = (import.meta.env.VITE_PUBLIC_ASSET_BASE || (typeof process !== 'undefined' ? process.env.VITE_PUBLIC_ASSET_BASE : '') || 'https://public-assets.example/assets/').replace(/\/?$/, '/')
-const ossBase = assetBase.startsWith('/') ? `${assetBase}jianlai/` : `${assetBase}jianlai/`
 
 export function apiBase(path = typeof window === 'undefined' ? '/' : window.location.pathname) {
   return path === '/jianlai-test' || path.startsWith('/jianlai-test/') ? '/jianlai-test/' : '/jianlai/'
@@ -75,12 +73,6 @@ export async function request<T = unknown>(path: string, init: RequestInit = {})
 export function assetUrl(value: unknown): string {
   if (!value) return ''
   const s = String(value)
-  if (s.startsWith('templates/')) {
-    const rest = s.slice('templates/'.length)
-    return /\.(?:png|jpe?g|webp)$/i.test(rest)
-      ? `${ossBase}templates/previews/${rest.replace(/\.(?:png|jpe?g|webp)$/i, '.webp')}`
-      : `${ossBase}${s}`
-  }
   return /^(https?:|data:|blob:)/.test(s) ? s : `${apiBase()}${s.replace(/^(?:\.\.\/|\/)+/, '')}`
 }
 

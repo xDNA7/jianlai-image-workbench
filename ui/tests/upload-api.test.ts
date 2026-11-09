@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
-import { fileToDataUrl, imageToDataUrl, jobImageReferenceUrl, request } from '../src/chat/api'
+import { assetUrl, fileToDataUrl, imageToDataUrl, jobImageReferenceUrl, request } from '../src/chat/api'
 const originals = new Map<string, PropertyDescriptor | undefined>()
 function replace(name: string, value: unknown) {
   if (!originals.has(name)) originals.set(name, Object.getOwnPropertyDescriptor(globalThis, name))
@@ -213,4 +213,10 @@ describe('bounded reference image reads', () => {
     expect(await imageToDataUrl('blob:fixture')).toContain('compressed')
     expect(seen).toEqual([png.length])
   })
+})
+
+ test('template media never relies on a build-time placeholder host', () => {
+  expect(assetUrl('templates/v2/example.png')).toBe('/jianlai/templates/v2/example.png')
+  expect(assetUrl('api/template-assets/' + 'a'.repeat(32))).toBe('/jianlai/api/template-assets/' + 'a'.repeat(32))
+  expect(assetUrl('https://runtime-cdn.example/templates/previews/example.webp')).toBe('https://runtime-cdn.example/templates/previews/example.webp')
 })

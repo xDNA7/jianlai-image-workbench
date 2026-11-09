@@ -443,6 +443,19 @@ try:
     psql(f"UPDATE stored_images SET preview_url=NULL,object_url=NULL WHERE job='{j['id']}'")
     check('admin expired preview falls back to original then retained local bytes; unauthenticated reads remain denied')
 
+    public_templates=req(port,'/api/templates')[1]
+    admin_templates=req(port,prefix+'/templates',cookie=admin)[1]
+    assert public_templates==admin_templates
+    seed_templates=json.loads((ROOT/'app/public/templates.json').read_text())
+    if isinstance(seed_templates,dict):seed_templates=seed_templates['templates']
+    source_previews={t['id']:t.get('preview','') for t in seed_templates}
+    for item in public_templates['templates']:
+        original=source_previews.get(item['id'],'')
+        if original.startswith('templates/') and original.endswith(('.png','.jpg','.jpeg','.webp')):
+            stem=original.rsplit('.',1)[0].removeprefix('templates/')
+            assert item['preview']==f'http://127.0.0.1:{PROVIDER.server_port}/local-test/templates/previews/{stem}.webp',item['id']
+    check('public/admin template lists resolve the same runtime OSS previews without frontend asset configuration')
+
     # Generated templates stay in review until explicitly saved. Upload mode
     # auto-saves a reusable template without charging for image generation.
     author={'mode':'generate','prompt':'test poster','requestKey':'author-local-test-00001'}

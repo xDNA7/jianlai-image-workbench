@@ -146,7 +146,7 @@ pub async fn handle(
         return admin::handle(&a, &path, &method, h, req, peer).await;
     }
     if path == "/api/templates" && method == "GET" {
-        return Ok(reply(200, a.manifest.lock().unwrap().clone()));
+        return Ok(reply(200, templates::manifest(&a)));
     }
     if path.starts_with("/api/template-assets/") && ["GET", "HEAD"].contains(&method.as_str()) {
         return templates::asset(&a, &path, method == "HEAD");

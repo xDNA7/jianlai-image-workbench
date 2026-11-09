@@ -1,4 +1,35 @@
 use crate::*;
+/// Resolve public media at runtime; never depend on a frontend build's asset host.
+pub fn manifest(a: &App) -> Value {
+    let mut value = a.manifest.lock().unwrap().clone();
+    if let Some(items) = value["templates"].as_array_mut() {
+        for item in items {
+            let preview = strv(item, "preview");
+            if !preview.starts_with("templates/")
+                || preview.contains("..")
+                || !matches(r"^templates/[a-zA-Z0-9_./-]+$", preview)
+            {
+                continue;
+            }
+            let key = if !preview.starts_with("templates/previews/")
+                && matches(r"(?i)\.(png|jpe?g|webp)$", preview)
+            {
+                let (stem, _) = preview.rsplit_once('.').unwrap();
+                format!(
+                    "templates/previews/{}.webp",
+                    stem.trim_start_matches("templates/")
+                )
+            } else {
+                preview.to_owned()
+            };
+            if let Some(url) = store::oss_public_url(a, &key) {
+                item["preview"] = json!(url);
+            }
+        }
+    }
+    value
+}
+
 pub const CATEGORIES: [&str; 8] = [
     "fun",
     "policy",

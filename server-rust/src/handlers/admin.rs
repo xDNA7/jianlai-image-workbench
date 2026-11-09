@@ -245,7 +245,7 @@ pub async fn handle(
         return Ok(reply(200, v));
     }
     if tail == "/templates" && method == "GET" {
-        return Ok(reply(200, a.manifest.lock().unwrap().clone()));
+        return Ok(reply(200, templates::manifest(a)));
     }
     if tail == "/templates" && method == "POST" {
         let input = body(req).await?;
