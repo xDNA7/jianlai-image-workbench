@@ -6,7 +6,7 @@ const user = (text: string, extra: Partial<UserItem> = {}): UserItem => ({ type:
 const job = (id: string): JobItem => ({ type: 'job', id, jobId: id, requestKey: id, plan: { prompt: id, text: '', count: 1, useReference: false, size: 'auto', quality: 'medium' }, status: 'done', started: 1, created: 1, images: [{ id, jobId: id, index: 0, preview: '/preview', download: '/download', prompt: id }] })
 const old = '1'.repeat(32), latest = '2'.repeat(32)
 test('independent creation resets old context while changes preserve it', () => {
-  for (const text of ['生成一张新图：海边', '帮我画一只猫', '不参考原图，另画两张', '生成新图', '改为完全独立的一片森林', '生成一张新海报，添加标题：春日', '帮我画一只猫，保留手绘质感']) expect(imageIntent(text)).toBe('new')
+  for (const text of ['生成一张新图：海边', '帮我画一只猫', '不参考原图，另画两张', '生成新图', '改为完全独立的一片森林', '生成一张新海报，添加标题：春日', '帮我画一只猫，保留手绘质感', '再来一只橘猫']) expect(imageIntent(text)).toBe('new')
   expect(withoutReference('不要用参考图，生成一只猫')).toBe(true)
   for (const text of ['改成黄色', '上一张重新生成', '换一个新风格', '不要新图，改上一张', '脚没动起来']) expect(imageIntent(text)).toBe('edit')
   const items = [user('旧话题'), job(old), user('生成一张新图：海边'), user('再亮一点')]

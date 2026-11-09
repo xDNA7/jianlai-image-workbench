@@ -11,6 +11,7 @@ export function imageIntent(text: string): 'new' | 'edit' | 'continue' {
   if (/(?:不要|不用|不必)(?:再)?(?:生成|画)?新图/.test(text)) return 'edit'
   if (withoutReference(text) || /(?:另|重新)(?:画|生成|创作)(?:一张|一幅)?(?:全)?新图|(?:生成|画|创作)(?:一张|一幅)?(?:全)?新图|全新(?:图片|画面|主题)|(?:完全)?独立(?:的|创作|生成)|新(?:画一张|的主题)/.test(text)) return 'new'
   const firstClause = text.split(/[，,。；;\n]/)[0]
+  if (/^再来(?:一|两|2)/.test(firstClause) && !/上一张|这张|原图|参考|同样|一样/.test(firstClause)) return 'new'
   if (/^(?:请|帮我|请帮我)?(?:再|另外|重新)?(?:画|生成|创作|制作)(?:一|两|2|幅|张|个)/.test(firstClause) && !/上一张|这张|原图|参考|刚才|重新生成/.test(firstClause)) return 'new'
   if (/(?:修改|改成|改为|改一下|调整|保持|保留|换成|换个|换一个|换背景|换颜色|去掉|删掉|添加|增加|再亮|再暗|没动|动起来|继续|上一张|这张|刚才|刚刚|重新生成)/.test(text)) return 'edit'
   if (/另画/.test(text)) return 'new'

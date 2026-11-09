@@ -350,14 +350,14 @@ async fn attempt(
     }
     Ok(())
 }
-/// Default order: 2.6 sunburst, 2.6 flare, 2.5 sunburst, 2.5 flare, then 2.0.
+/// Measured speed order: 2.6 flare, 2.5 flare, 2.5 sunburst, 2.6 sunburst, then 2.0.
 /// A model that fails for a retryable reason hands over to the next one (see
 /// `classify`).
 const DEFAULT_MODELS: [&str; 5] = [
-    "gpt-image-2.6-sunburst",
     "gpt-image-2.6-flare",
-    "gpt-image-2.5-sunburst",
     "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
+    "gpt-image-2.6-sunburst",
     "gpt-image-2",
 ];
 fn models(configured: &str) -> Vec<&str> {
@@ -963,14 +963,14 @@ mod tests {
         assert_eq!(seen.lock().unwrap().len(), 1);
     }
     #[test]
-    fn default_order_is_sunburst_then_flare_down_to_2_0() {
+    fn default_order_prefers_measured_speed_with_base_model_last() {
         assert_eq!(
             models(""),
             vec![
-                "gpt-image-2.6-sunburst",
                 "gpt-image-2.6-flare",
-                "gpt-image-2.5-sunburst",
                 "gpt-image-2.5-flare",
+                "gpt-image-2.5-sunburst",
+                "gpt-image-2.6-sunburst",
                 "gpt-image-2",
             ]
         );
