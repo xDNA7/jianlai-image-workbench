@@ -11,3 +11,5 @@ pub mod templates;
 pub mod upstream;
 pub mod video;
 pub(crate) mod video_storyboard;
+
+pub(crate) mod video_style;

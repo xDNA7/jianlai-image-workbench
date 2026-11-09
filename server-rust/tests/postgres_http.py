@@ -11,8 +11,6 @@ WORK=pathlib.Path(tempfile.mkdtemp(prefix='jianlai-pg-business-',dir='/tmp'))
 PROCESSES=[]
 LOGS=[]
 FAILED=False
-VIDEO_SESSIONS={}
-VIDEO_ACCOUNTS=set()
 VIDEO_BYTES=b"\x00\x00\x00\x20ftypisom"+b"\0"*20
 
 def psql(sql, database=DB):
@@ -34,6 +32,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
     image_requests={}
     edit_requests=[]
     video_polls=[]
+    video_requests=[]
     peak=0
     guard=threading.Lock()
     def log_message(self,*args):pass
@@ -79,6 +78,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
                     result={'data':[{'b64_json':base64.b64encode(GIF if 'GIF_TEST' in prompt and 'STATIC_GIF_TEST' not in prompt else png(c)).decode()} for c in colors]}
         elif self.path.endswith('/v2/video_generation'):
             value=json.loads(body)
+            with Provider.guard:Provider.video_requests.append(value)
             self.send_response(200);result={'task_id':'mock-video'}
         elif self.path.endswith('/chat/completions'):
             value=json.loads(body)
@@ -151,8 +151,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args):return None
 OPENER=urllib.request.build_opener(NoRedirect)
-def req(port,path,body=None,cookie='',csrf=None,method=None,video_auth=True,extra_headers=None):
-    if video_auth and (port,cookie) in VIDEO_SESSIONS:cookie += '; '+VIDEO_SESSIONS[(port,cookie)]
+def req(port,path,body=None,cookie='',csrf=None,method=None,extra_headers=None):
     headers={'Origin':f'http://127.0.0.1:{port}','Cookie':cookie}
     if body is not None:headers['Content-Type']='application/json'
     if csrf:headers['X-CSRF-Token']=csrf
@@ -162,12 +161,6 @@ def req(port,path,body=None,cookie='',csrf=None,method=None,video_auth=True,extr
     except urllib.error.HTTPError as e:res=e
     data=res.read()
     return res.status, json.loads(data) if data and res.headers.get('Content-Type','').startswith('application/json') else data, res.headers
-
-def video_login(port,cookie):
-    code,data,headers=req(port,'/api/video-access',{'password':'test-password'},cookie,video_auth=False)
-    assert code==200 and data['authenticated'],(code,data)
-    VIDEO_SESSIONS[(port,cookie)]=headers['Set-Cookie'].split(';')[0]
-    VIDEO_ACCOUNTS.add(cookie)
 
 def start(index,maintenance=False,mode="postgres"):
     data=WORK/f'data{index}';data.mkdir(exist_ok=True)
@@ -196,8 +189,6 @@ ADMIN_PATH=local_test_admin_path_123456
 ADMIN_USERNAME=test-admin
 ADMIN_PASSWORD_SALT={salt}
 ADMIN_PASSWORD_HASH={digest}
-VIDEO_ACCESS_PASSWORD_SALT={salt}
-VIDEO_ACCESS_PASSWORD_HASH={digest}
 CLEANUP_INTERVAL_MS=3600000
 ''')
     if mode=='sqlite':
@@ -210,8 +201,6 @@ CLEANUP_INTERVAL_MS=3600000
     for _ in range(100):
         try:
             if req(port,'/api/health')[0]==200:
-                if not maintenance and mode=='postgres':
-                    for account_cookie in VIDEO_ACCOUNTS.copy():video_login(port,account_cookie)
                 return port,p
         except (OSError,urllib.error.URLError):pass
         if p.poll() is not None:raise AssertionError(f'server startup failed ({p.returncode})')
@@ -243,15 +232,15 @@ try:
     check('all repository statements prepare against real PostgreSQL')
     one,c1=bootstrap(port);two,c2=bootstrap(port2)
     unchanged=psql('SELECT balance FROM shared_ledger')
-    assert req(port,'/api/videos',cookie=c1,video_auth=False)[0]==401
-    assert req(port,'/api/chat',{'mode':'video','messages':[{'role':'user','content':'test'}]},c1,video_auth=False)[0]==401
-    assert req(port,'/api/bootstrap',cookie=c1,video_auth=False)[1]['activeVideo'] is None
-    assert req(port,'/api/history',cookie=c1,video_auth=False)[0]==200
-    assert req(port,'/api/video-access',{'password':'test-password'},c1,video_auth=False,extra_headers={'Origin':'https://foreign.invalid'})[0]==403
-    video_login(port,c1);video_login(port,c2)
-    if port2!=port:video_login(port2,c1);video_login(port2,c2)
+    assert req(port,'/api/videos',cookie=c1)[0]==200
+    assert req(port,'/api/videos')[0]==401
+    boot=req(port,'/api/bootstrap',cookie=c1)[1]
+    assert boot['activeVideo'] is None and boot['videoEnabled'] and not boot['videoAccessRequired']
+    assert req(port,'/api/history',cookie=c1)[0]==200
+    for path,body in [('/api/videos',{}),('/api/chat',{'mode':'video','messages':[]})]:
+        assert req(port,path,body,c1,extra_headers={'Origin':'https://foreign.invalid'})[0]==403
     assert psql('SELECT balance FROM shared_ledger')==unchanged
-    check('video-only internal login gates direct API/chat/bootstrap without changing public image access or balance')
+    check('public video uses ordinary account identity, preserves Origin checks and does not change balance')
     assert not list(WORK.glob('data*/state.sqlite'))
     check('postgres starts without SQLite and bootstrap persists account')
     def chat_events(payload):
@@ -264,7 +253,7 @@ try:
             if event and data:result.append((event,json.loads(data)))
         return result
     untouched=psql('SELECT (SELECT count(*) FROM jobs)::text || \':\' || (SELECT count(*) FROM video_jobs)::text || \':\' || (SELECT balance FROM shared_ledger WHERE id=1)::text')
-    for content,seconds,limited in [('做一条雨后城市短片',10,False),('做20秒的城市短片',15,True),('做三十秒的城市短片',15,True),('做1分钟的城市短片',15,True),('做8秒的城市短片',8,False),('不要20秒，改为10秒',10,False),('从20秒缩短到8秒',8,False)]:
+    for content,seconds,limited in [('做一条雨后城市短片',15,False),('做20秒的城市短片',15,True),('做三十秒的城市短片',15,True),('做1分钟的城市短片',15,True),('做8秒的城市短片',8,False),('不要20秒，改为10秒',10,False),('从20秒缩短到8秒',8,False)]:
         events=chat_events({'mode':'video','messages':[{'role':'user','content':content}]})
         plans=[data for name,data in events if name=='storyboard'];assert len(plans)==1,events
         plan=plans[0];assert plan['duration']==seconds and sum(shot['duration'] for shot in plan['shots'])==seconds,plan
@@ -478,7 +467,17 @@ try:
     assert req(port,prefix+'/templates/author/'+task['id'],cookie=admin)[1]['deleted']
     assert psql('SELECT balance FROM shared_ledger')=='50040'
     check('template author task, generated review/save/delete and free upload auto-save')
-    video={'prompt':'mock video','duration':4,'ratio':'16:9','resolution':'768P','requestKey':'video-local-test-00001'}
+    video={'prompt':'mock video','style':'realistic','duration':4,'ratio':'16:9','resolution':'768P','requestKey':'video-local-test-00001'}
+    before_2k=(psql('SELECT balance FROM shared_ledger'),psql('SELECT count(*) FROM video_jobs'),len(Provider.video_requests))
+    for reference in [None,'data:image/png;base64,'+base64.b64encode(PNG).decode()]:
+        invalid={**video,'resolution':'2K','requestKey':'unsupported-2k-test-'+('image' if reference else 'text')}
+        if reference:invalid['image']=reference
+        code,rejected,_=req(port,'/api/videos',invalid,c1);assert code==400,(code,rejected)
+        lookup='/api/videos/by-request?requestKey='+invalid['requestKey']
+        assert req(port,lookup,cookie=c1)[0]==404
+        assert req(port,lookup,cookie=c2)[0]==404
+    assert (psql('SELECT balance FROM shared_ledger'),psql('SELECT count(*) FROM video_jobs'),len(Provider.video_requests))==before_2k
+    check('unsupported 2K rejects both text and image inputs without accepting, charging or calling provider')
     code,v,_=req(port,'/api/videos',video,c1);assert code==202,(code,v)
     duplicate=req(port2,'/api/videos',video,c1);assert duplicate[0]==200 and duplicate[1]['id']==v['id'],duplicate
     by_request='/api/videos/by-request?requestKey='+video['requestKey']
@@ -493,6 +492,14 @@ try:
         if finished['status'] in ('done','failed'):break
         time.sleep(.1)
     assert finished['status']=='done' and finished['chargedCents']==480 and finished['reservedCents']==0,finished
+    assert req(port,'/api/videos',{**video,'style':'clay'},c1)[0]==409
+    sent=Provider.video_requests[0]
+    assert sent['resolution']=='768P' and sent['duration']==4 and sent['ratio']=='16:9',sent
+    prepared=sent['content'][0]['text']
+    assert prepared.startswith('mock video\n\n【生成质量规范】\n') and '毛孔' in prepared and '油画笔触' in prepared,prepared
+    assert all(key not in sent for key in ['prompt_optimizer','negative_prompt','seed','guidance_scale','fps','extra']),sent
+    assert finished['prompt']==prepared
+    check('server-prepared real skin prompt reaches provider once; style is fingerprinted and unsupported quality fields are absent')
     restored=req(port2,by_request,cookie=c1)
     assert restored[0]==200 and restored[1]['id']==v['id'] and restored[1]['status']=='done'
     assert req(port, '/api/videos/by-request?requestKey=video-missing-test-00001',cookie=c1)[0]==404
@@ -501,7 +508,7 @@ try:
     assert not list(WORK.glob('data*/video-tmp/*.mp4'))
     media='/api/videos/'+v['id']+'/media'
     assert finished['url']=='api/videos/'+v['id']+'/media'
-    assert req(port,media,cookie=c1,video_auth=False)[0]==401
+    assert req(port,media)[0]==401
     assert req(port,media,cookie=c2)[0]==404
     code,media_body,headers=req(port,media,cookie=c1);assert code==200 and media_body==VIDEO_BYTES,(code,media_body)
     assert headers['Cache-Control']=='private, no-store'
@@ -515,10 +522,7 @@ try:
     try:OPENER.open(f'http://127.0.0.1:{PROVIDER.server_port}/local-test/results/videos/'+v['id']+'.mp4');raise AssertionError('private video became public')
     except urllib.error.HTTPError as error:assert error.code==403
     assert all(cmd[cmd.index('--expires-duration')+1]=='5m' for cmd in commands if 'presign' in cmd and any('results/videos/' in item for item in cmd))
-    assert req(port,'/api/video-access',cookie=c1,method='DELETE')[0]==200
-    assert req(port,media,cookie=c1)[0]==401
-    video_login(port,c1)
-    check('private video object ACL and authenticated media GET/HEAD/Range/account isolation/logout')
+    check('private video object ACL and account-scoped media GET/HEAD/Range/isolation')
     check('video provider/mock OSS full success, idempotency, isolation and exact billing')
     psql('UPDATE shared_ledger SET balance=50070')
 
@@ -790,6 +794,19 @@ INSERT INTO video_jobs(id,account,request_key,fingerprint,status,phase,created,r
     assert original_bytes(created['id'])[0]==GIF
     assert int(psql('SELECT balance FROM shared_ledger'))==before-30
     check('GIF authenticated bytes -> first-frame PNG reference -> newly generated GIF preserves animation metadata and single-image billing')
+
+    legacy_video={'prompt':'legacy pending video','duration':4,'ratio':'16:9','resolution':'768P','requestKey':'legacy-video-style-compat-001'}
+    before=int(psql('SELECT balance FROM shared_ledger'))
+    code,legacy,_=req(port,'/api/videos',legacy_video,c1);assert code==202,(code,legacy)
+    duplicate=req(port,'/api/videos',{**legacy_video,'style':'auto','stylePrompt':''},c1)
+    assert duplicate[0]==200 and duplicate[1]['id']==legacy['id'],duplicate
+    for _ in range(200):
+        code,finished,_=req(port,'/api/videos/'+legacy['id'],cookie=c1)
+        if finished['status'] in ('done','failed'):break
+        time.sleep(.1)
+    assert finished['status']=='done' and finished['chargedCents']==480,finished
+    assert int(psql('SELECT balance FROM shared_ledger'))==before-480
+    check('legacy video payload and explicit auto style reconcile one original job and charge once')
 
     print('PostgreSQL business HTTP integration: ALL PASSED',flush=True)
 except BaseException:

@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 
 const jobId = 'video-regression'
 const video = { id: jobId, status: 'running', phase: 'generating', progress: 25, duration: 10, ratio: '16:9', prompt: '雨后窗边的咖啡杯', availableCents: 3800 }
-const defaultPlan = { duration: 10, ratio: '16:9', resolution: '768P', shots: [{ duration: 3, scene: '雨后的窗边', camera: '慢慢推进' }, { duration: 7, scene: '咖啡杯升起热气', camera: '镜头停稳' }] }
+const defaultPlan = { duration: 15, ratio: '16:9', resolution: '768P', shots: [{ duration: 5, scene: '雨后的窗边', camera: '慢慢推进' }, { duration: 10, scene: '咖啡杯升起热气', camera: '镜头停稳' }] }
 type Lookup = 'found' | 'missing' | 'unavailable' | 'done'
 async function install(page: Page, restore: boolean, dropFirst = false) {
   const submissions: Record<string, unknown>[] = [], chats: Record<string, unknown>[] = []
@@ -18,11 +18,11 @@ async function install(page: Page, restore: boolean, dropFirst = false) {
       const chat = request.postDataJSON(); chats.push(chat)
       if (chatFails) return route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: '分镜供应商暂时不可用' }) })
       const content = chat.messages.at(-1).content as string
-      const plan = /20|二十/.test(content) ? { ...defaultPlan, duration: 15, shots: [{ ...defaultPlan.shots[0], duration: 5 }, { ...defaultPlan.shots[1], duration: 10 }], notice: '最多一次性生成 15 秒的画面，已将内容优化为 15 秒分镜。' } : defaultPlan
+      const plan = /20|二十/.test(content) ? { ...defaultPlan, duration: 15, shots: [{ ...defaultPlan.shots[0], duration: 5 }, { ...defaultPlan.shots[1], duration: 10 }], notice: '最多一次性生成 15 秒的画面，已将内容优化为 15 秒分镜。' } : /10秒/.test(content) ? { ...defaultPlan, duration: 10, shots: [{ ...defaultPlan.shots[0], duration: 3 }, { ...defaultPlan.shots[1], duration: 7 }] } : { ...defaultPlan, style: chat.video.style || 'auto', ...(chat.video.stylePrompt ? { stylePrompt: chat.video.stylePrompt } : {}) }
       return route.fulfill({ status: 200, contentType: 'text/event-stream', body: `event: meta\ndata: {"used":1,"limit":50}\n\nevent: delta\ndata: {"text":"我把内容整理成连续镜头。"}\n\nevent: storyboard\ndata: ${JSON.stringify(plan)}\n\nevent: done\ndata: {}\n\n` })
     } else if (path.endsWith('/chat')) body = { used: 0, limit: 50 }
     else if (path.endsWith('/videos') && request.method() === 'POST') {
-      const payload = request.postDataJSON(); submissions.push(payload); last = { ...last, status: 'running', prompt: payload.prompt, duration: payload.duration }
+      const payload = request.postDataJSON(); submissions.push(payload); last = { ...last, status: 'running', prompt: `${payload.prompt}\n\n【生成质量规范】\n统一光线和运动`, duration: payload.duration }
       if (dropFirst && submissions.length === 1) return route.abort('failed')
       body = failVideo ? { ...last, status: 'failed', error: '供应商拒绝任务，额度已退回' } : last
       failVideo = false
@@ -44,21 +44,21 @@ async function compose(page: Page, text = video.prompt) {
 }
 const confirm = (page: Page) => page.getByRole('button', { name: '确认分镜并生成视频', exact: true }).click()
 
-test('video conversation defaults to ten seconds and only confirmation creates one paid task', async ({ page }, info) => {
+test('video conversation defaults to fifteen seconds and only confirmation creates one paid task', async ({ page }, info) => {
   const mock = await install(page, false)
   await page.goto('/?view=video', { waitUntil: 'networkidle' })
   await expect(page.getByRole('heading', { name: '创建视频' })).toBeVisible()
   await compose(page)
   expect(mock.submissions).toHaveLength(0)
-  expect(mock.chats[0]).toMatchObject({ mode: 'video', video: { duration: 10 } })
-  await expect(page.getByLabel('视频总时长')).toHaveValue('10')
-  await expect(page.getByText('预计 ¥12.00 · ¥1.20 / 秒', { exact: true })).toBeVisible()
+  expect(mock.chats[0]).toMatchObject({ mode: 'video', video: { duration: 15 } })
+  await expect(page.getByLabel('视频总时长')).toHaveValue('15')
+  await expect(page.getByText('预计 ¥18.00 · ¥1.20 / 秒', { exact: true })).toBeVisible()
   await page.screenshot({ path: info.outputPath('video-storyboard.png'), fullPage: true, animations: 'disabled' })
   await page.getByLabel('镜头1画面').fill('修改后的窗边画面')
   await confirm(page)
   await expect(page.getByText('25%', { exact: true })).toBeVisible()
   expect(mock.submissions).toHaveLength(1)
-  expect(mock.submissions[0]).toMatchObject({ duration: 10, ratio: '16:9', resolution: '768P', image: '' })
+  expect(mock.submissions[0]).toMatchObject({ duration: 15, ratio: '16:9', resolution: '768P', image: '' })
   expect(String(mock.submissions[0].prompt)).toContain('修改后的窗边画面')
   expect(String(mock.submissions[0].requestKey)).toMatch(/^[0-9a-f-]{36}$/)
 })
@@ -109,7 +109,7 @@ test('refresh resolves a saved video key to a completed result without submittin
   await page.goto('/?view=video', { waitUntil: 'networkidle' }); await compose(page); await confirm(page)
   await expect(page.getByRole('alert')).toContainText('上次视频提交结果尚未确认')
   mock.setLookup('done'); await page.reload({ waitUntil: 'networkidle' })
-  await expect(page.getByText('生成完成 · 10 秒', { exact: true })).toBeVisible()
+  await expect(page.getByText('生成完成 · 15 秒', { exact: true })).toBeVisible()
   expect(mock.submissions).toHaveLength(1)
   expect(await page.evaluate(() => sessionStorage.getItem('jianlai:pending-video:video-account'))).toBeNull()
 })
@@ -175,9 +175,9 @@ test('video first frame and followup edits survive the storyboard confirmation b
   await compose(page)
   await expect(page.getByAltText('视频首帧', { exact: true })).toBeVisible()
   await page.getByLabel('视频总时长').selectOption('12')
-  await page.getByLabel('视频清晰度').selectOption('2K')
+  await expect(page.getByText('清晰度 768P', { exact: true })).toBeVisible()
   await compose(page, '让镜头更慢一些')
-  expect(mock.chats[1]).toMatchObject({ video: { duration: 12, ratio: '16:9', resolution: '2K' } })
+  expect(mock.chats[1]).toMatchObject({ video: { duration: 12, ratio: '16:9', resolution: '768P' } })
   expect(mock.submissions).toHaveLength(0)
   await confirm(page)
   await expect.poll(() => mock.submissions.length).toBe(1)
@@ -205,17 +205,17 @@ test('shot editing keeps one paid video and its total duration while preserving 
   await expect(page.getByLabel('镜头2画面', { exact: true })).toHaveValue(defaultPlan.shots[0].scene)
   await page.getByRole('button', { name: '镜头1复制', exact: true }).click()
   await expect(shots.getByRole('listitem')).toHaveCount(3)
-  await expect(page.getByLabel('视频总时长')).toHaveValue('10')
+  await expect(page.getByLabel('视频总时长')).toHaveValue('15')
   await page.getByLabel('镜头2画面', { exact: true }).fill('复制镜头的独立编辑')
   await expect(page.getByLabel('镜头1画面', { exact: true })).toHaveValue(defaultPlan.shots[1].scene)
   await page.getByRole('button', { name: '镜头3删除', exact: true }).click()
   await expect(shots.getByRole('listitem')).toHaveCount(2)
-  await expect(page.getByLabel('视频总时长')).toHaveValue('10')
-  await expect(page.getByText('预计 ¥12.00 · ¥1.20 / 秒', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('视频总时长')).toHaveValue('15')
+  await expect(page.getByText('预计 ¥18.00 · ¥1.20 / 秒', { exact: true })).toBeVisible()
   expect(mock.submissions).toHaveLength(0)
   await confirm(page)
   await expect.poll(() => mock.submissions.length).toBe(1)
-  expect(mock.submissions[0].duration).toBe(10)
+  expect(mock.submissions[0].duration).toBe(15)
   expect(String(mock.submissions[0].prompt)).toContain(defaultPlan.shots[1].scene)
   expect(String(mock.submissions[0].prompt)).toContain('复制镜头的独立编辑')
   expect(String(mock.submissions[0].prompt)).not.toContain(defaultPlan.shots[0].scene)
@@ -229,9 +229,38 @@ test('shot editing respects the six-shot limit and always retains at least one s
   for (let count = 2; count < 6; count += 1) await page.getByRole('button', { name: '镜头1复制', exact: true }).click()
   await expect(shots.getByRole('listitem')).toHaveCount(6)
   for (let index = 1; index <= 6; index += 1) await expect(page.getByRole('button', { name: `镜头${index}复制`, exact: true })).toBeDisabled()
-  await expect(page.getByLabel('视频总时长')).toHaveValue('10')
+  await expect(page.getByLabel('视频总时长')).toHaveValue('15')
   for (let count = 6; count > 1; count -= 1) await page.getByRole('button', { name: '镜头1删除', exact: true }).click()
   await expect(shots.getByRole('listitem')).toHaveCount(1)
   await expect(page.getByRole('button', { name: '镜头1删除', exact: true })).toBeDisabled()
+  await expect(page.getByLabel('视频总时长')).toHaveValue('15')
+})
+
+
+test('style selection persists in followup context and submits one optimized animated video', async ({ page }) => {
+  const mock = await install(page, false)
+  await page.goto('/?view=video', { waitUntil: 'networkidle' }); await compose(page)
+  await page.getByLabel('视频画风', { exact: true }).selectOption('clay')
+  await compose(page, '保持这个画风，让镜头更慢')
+  expect(mock.chats[1]).toMatchObject({ video: { duration: 15, style: 'clay', resolution: '768P' } })
+  await expect(page.getByLabel('视频画风', { exact: true })).toHaveValue('clay')
+  await confirm(page)
+  await expect.poll(() => mock.submissions.length).toBe(1)
+  expect(mock.submissions[0]).toMatchObject({ style: 'clay', resolution: '768P' })
+  expect(String(mock.submissions[0].prompt)).toContain('手工粘土定格动画')
+  expect(String(mock.submissions[0].prompt)).not.toContain('皮肤微纹理')
+  await expect(page.getByRole('button', { name: '已提交视频', exact: true })).toBeDisabled()
+})
+
+test('custom style requires a description and explicit ten-second requests remain supported', async ({ page }) => {
+  const mock = await install(page, false)
+  await page.goto('/?view=video', { waitUntil: 'networkidle' }); await compose(page, '生成10秒的视频')
   await expect(page.getByLabel('视频总时长')).toHaveValue('10')
+  await page.getByLabel('视频画风', { exact: true }).selectOption('custom')
+  await expect(page.getByRole('button', { name: '确认分镜并生成视频', exact: true })).toBeDisabled()
+  await page.getByLabel('自定义视频画风', { exact: true }).fill('柔和水彩，纸张纹理')
+  await confirm(page)
+  await expect.poll(() => mock.submissions.length).toBe(1)
+  expect(mock.submissions[0]).toMatchObject({ duration: 10, style: 'custom', stylePrompt: '柔和水彩，纸张纹理' })
+  expect(String(mock.submissions[0].prompt)).toContain('画风：柔和水彩，纸张纹理')
 })

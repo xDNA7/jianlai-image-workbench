@@ -176,12 +176,7 @@ pub async fn handle(
             set=Some(format!("jianlai_session={raw}; HttpOnly; SameSite=Strict; Path=/jianlai/; Max-Age=31536000{}",if h.get("x-forwarded-proto").is_some_and(|s|s=="https"){"; Secure"}else{""}));
             account
         };
-        let video_authenticated = video_access::expires(&a, &h, &account).is_some();
-        let active_video = if video_authenticated {
-            db.query_row(repositories::statements::api::SELECT_VIDEO_JOBS_ACCOUNT_STATUS_QUEUED_RUNNING_CREATED,[&account],|r|r.get::<_,String>(0)).optional()?
-        } else {
-            None
-        };
+        let active_video = db.query_row(repositories::statements::api::SELECT_VIDEO_JOBS_ACCOUNT_STATUS_QUEUED_RUNNING_CREATED,[&account],|r|r.get::<_,String>(0)).optional()?;
         let active = db
             .query_row(
                 repositories::statements::api::SELECT_JOBS_ACCOUNT_STATUS_QUEUED_RUNNING_CREATED,
@@ -196,8 +191,8 @@ pub async fn handle(
         v["videoPriceCentsPerSecond"] = json!(120);
         v["videoMinSeconds"] = json!(4);
         v["videoMaxSeconds"] = json!(15);
-        v["videoEnabled"] = json!(video_authenticated);
-        v["videoAccessRequired"] = json!(true);
+        v["videoEnabled"] = json!(true);
+        v["videoAccessRequired"] = json!(false);
         v["capabilities"] = store::capabilities();
         v["activeJob"] = active
             .map(|j| store::public_job(&db, &j))
@@ -233,14 +228,10 @@ pub async fn handle(
         if !["GET", "HEAD"].contains(&method.as_str()) && !same_origin(&h) {
             return Err(Error(403, "请求来源无效".into()));
         }
-        if path == "/api/video-access" {
-            return video_access::handle(&a, &h, &account, &method, req, peer).await;
-        }
-        if path == "/api/videos" || path.starts_with("/api/videos/") {
-            video_access::require(&a, &h, &account)?;
-            if !["GET", "HEAD"].contains(&method.as_str()) {
-                video_access::require_origin(&h)?;
-            }
+        if (path == "/api/videos" || path.starts_with("/api/videos/"))
+            && !["GET", "HEAD"].contains(&method.as_str())
+        {
+            video_access::require_origin(&h)?;
         }
         if let Some(c) = regex::Regex::new(r"^/api/videos/([a-f0-9]{32})/media$")
             .unwrap()
@@ -279,7 +270,6 @@ pub async fn handle(
         if path == "/api/chat" && method == "POST" {
             let input = body(req).await?;
             if strv(&input, "mode") == "video" {
-                video_access::require(&a, &h, &account)?;
                 video_access::require_origin(&h)?;
             }
             return chat::handle(&a, &account, input).await;

@@ -6,6 +6,8 @@ export type VideoPayload = {
   ratio: string
   resolution: string
   image: string
+  style?: string
+  stylePrompt?: string
 }
 
 const storageKey = (accountId: string) => `jianlai:pending-video:${encodeURIComponent(accountId)}`
@@ -34,6 +36,8 @@ export async function videoPayloadHash(payload: VideoPayload): Promise<string> {
   const bytes = new TextEncoder().encode(JSON.stringify({
     prompt: payload.prompt, duration: payload.duration, ratio: payload.ratio,
     resolution: payload.resolution, image: payload.image,
+    ...(payload.style && payload.style !== 'auto' ? { style: payload.style } : {}),
+    ...(payload.stylePrompt?.trim() ? { stylePrompt: payload.stylePrompt.trim() } : {}),
   }))
   const digest = await crypto.subtle.digest('SHA-256', bytes)
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')

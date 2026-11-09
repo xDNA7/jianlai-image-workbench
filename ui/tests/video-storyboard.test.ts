@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import { compileStoryboard, duplicateStoryboardShot, moveStoryboardShot, normalizeStoryboard, removeStoryboardShot, resizeStoryboard, type VideoStoryboard } from '../src/chat/video-storyboard'
+import { compileStoryboard, duplicateStoryboardShot, moveStoryboardShot, normalizeStoryboard, removeStoryboardShot, resizeStoryboard, videoStyles, type VideoStoryboard } from '../src/chat/video-storyboard'
 
-const plan: VideoStoryboard = { duration: 10, ratio: '16:9', resolution: '768P', shots: [
+const plan: VideoStoryboard = { duration: 10, ratio: '16:9', resolution: '768P', style: 'auto', shots: [
   { duration: 3, scene: '雨滴落下', camera: '低机位推进' },
   { duration: 7, scene: '街道灯光', camera: '缓慢抬升' },
 ] }
@@ -74,5 +74,31 @@ describe('workbench shot edits', () => {
       expect(duplicateStoryboardShot(plan, index)).toBe(plan)
       expect(removeStoryboardShot(plan, index)).toBe(plan)
     }
+  })
+})
+
+
+describe('video style and legacy drafts', () => {
+  test('restores older drafts with auto style and supported resolution', () => {
+    const { style: _style, ...legacy } = plan
+    expect(normalizeStoryboard({ ...legacy, resolution: '2K' })).toMatchObject({ style: 'auto', resolution: '768P' })
+    expect(compileStoryboard({ ...plan, resolution: '2K' as '768P' })).toBeNull()
+  })
+  test('keeps animation materials separate from realistic skin guidance', () => {
+    expect(compileStoryboard({ ...plan, style: 'realistic' })).toContain('自然皮肤微纹理')
+    for (const style of videoStyles.filter(style => !['auto', 'realistic', 'custom'].includes(style.value))) {
+      const prompt = compileStoryboard({ ...plan, style: style.value })
+      expect(prompt).toContain(style.prompt)
+      expect(prompt).not.toContain('皮肤微纹理')
+    }
+    expect(compileStoryboard(plan)).not.toContain('画风：')
+  })
+  test('validates custom style and preserves style through shot edits', () => {
+    expect(compileStoryboard({ ...plan, style: 'custom' })).toBeNull()
+    expect(compileStoryboard({ ...plan, style: 'custom', stylePrompt: '  水彩纸张，清淡色彩  ' })).toContain('画风：水彩纸张，清淡色彩。')
+    expect(normalizeStoryboard({ ...plan, style: 'custom', stylePrompt: '画'.repeat(121) })).toBeNull()
+    expect(normalizeStoryboard({ ...plan, style: 'unknown' })).toBeNull()
+    const styled = { ...plan, style: 'clay' as const }
+    expect(resizeStoryboard(duplicateStoryboardShot(styled, 0), 15).style).toBe('clay')
   })
 })

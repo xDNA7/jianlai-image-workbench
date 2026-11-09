@@ -1,5 +1,4 @@
 import { ApiError, apiBase, createSseParser } from './api'
-import { notifyVideoAccessExpired } from './video-access-events'
 import { normalizeStoryboard, type VideoStoryboard } from './video-storyboard'
 
 export type VideoMessage = { role: 'user' | 'assistant'; content: string }
@@ -9,14 +8,13 @@ export type VideoChatHandlers = {
   onMeta: (used: number, limit: number) => void
 }
 
-export async function streamVideoChat(messages: VideoMessage[], video: { duration: number; ratio?: VideoStoryboard['ratio']; resolution?: VideoStoryboard['resolution'] }, handlers: VideoChatHandlers, signal: AbortSignal) {
+export async function streamVideoChat(messages: VideoMessage[], video: { duration: number; style?: string; stylePrompt?: string; ratio?: VideoStoryboard['ratio']; resolution?: VideoStoryboard['resolution'] }, handlers: VideoChatHandlers, signal: AbortSignal) {
   const response = await fetch(`${apiBase()}api/chat`, {
     method: 'POST', credentials: 'same-origin', signal,
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
     body: JSON.stringify({ mode: 'video', messages, video }),
   })
   if (!response.ok || !response.body) {
-    if (response.status === 401) notifyVideoAccessExpired()
     const body: unknown = await response.json().catch(() => null)
     const message = body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : '视频分镜暂时无法整理，请重试'
     throw new ApiError(response.status, message)

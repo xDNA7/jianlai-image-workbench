@@ -14,7 +14,6 @@ import {
 import type { FavoriteTarget } from './store'
 import { completedVideos } from './media-gallery'
 import { imageIntent, previousReference, withoutReference } from './context'
-import { useVideoAccess } from './useVideoAccess'
 import { referencePromptWithMarks, toApiAnnotations } from './marks'
 import type { Mark } from './marks'
 import type {
@@ -69,7 +68,6 @@ export function useWorkbench() {
   })
   const boot = bootQuery.data ?? null
   const accountId = boot?.accountId ?? null
-  const videoAccess = useVideoAccess(accountId)
   const balance = boot?.availableCents ?? null
   const usageQuery = useQuery({
     queryKey: ['chat', 'usage', accountId],
@@ -91,11 +89,11 @@ export function useWorkbench() {
   const videosQuery = useQuery({
     queryKey: ['videos', accountId],
     queryFn: ({ signal }) => loadVideos(signal),
-    enabled: ready && galleryRequested && videoAccess.authenticated,
+    enabled: ready && galleryRequested,
     retry: 1,
   })
-  const videoGallery = videoAccess.authenticated ? completedVideos(videosQuery.data || []) : []
-  const videoGalleryState: 'idle' | 'loading' | 'ready' | 'error' = !videoAccess.authenticated ? 'idle' : !galleryRequested && !videosQuery.data ? 'idle' : videosQuery.isError ? 'error' : videosQuery.data ? 'ready' : 'loading'
+  const videoGallery = completedVideos(videosQuery.data || [])
+  const videoGalleryState: 'idle' | 'loading' | 'ready' | 'error' = !galleryRequested && !videosQuery.data ? 'idle' : videosQuery.isError ? 'error' : videosQuery.data ? 'ready' : 'loading'
   const ensureGallery = useCallback(() => setGalleryRequested(true), [])
   const templatesQuery = useQuery({
     queryKey: ['templates', accountId],
@@ -123,9 +121,9 @@ export function useWorkbench() {
     setGalleryRequested(true)
     await Promise.all([
       queryClient.refetchQueries({ queryKey: ['history', 'gallery', accountId], exact: true }),
-      ...(videoAccess.authenticated ? [queryClient.refetchQueries({ queryKey: ['videos', accountId], exact: true })] : []),
+      queryClient.refetchQueries({ queryKey: ['videos', accountId], exact: true }),
     ])
-  }, [accountId, queryClient, videoAccess.authenticated])
+  }, [accountId, queryClient])
 
   useEffect(() => {
     if (!boot) return
@@ -535,7 +533,7 @@ export function useWorkbench() {
   const busy = items.some(isActiveJob)
   const price = boot?.capabilities.priceCents ?? 30
   return {
-    boot, bootError, ready, items, balance, usage, replying, busy, price, videoAccess,
+    boot, bootError, ready, items, balance, usage, replying, busy, price,
     gallery, galleryState, videoGallery, videoGalleryState, ensureGallery, favorites, templates, templatesState, mine, saveMine, removeMine,
     send, stopReplying, updatePlan, rebindReference, uploadPersonReference, dismissPlan, confirmPlan, generateAsWritten,
     refreshBalance, pinned, pin, unpin, stopWaiting, retryPolling, retryGeneration, clearAll, refreshGallery, toggleFavorite, deleteImage, ensureTemplates,

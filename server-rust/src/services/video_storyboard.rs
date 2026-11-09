@@ -4,7 +4,7 @@ use crate::{strv, Error, Result};
 use serde_json::{json, Value};
 use std::sync::LazyLock;
 
-pub const SYSTEM: &str = "你是「剑来」的视频分镜创作助手。根据本次明确需求与对话上下文，整理一条完整视频的连续分镜，不生成视频、不调用工具、不声称已扣费。保留用户主体、文字、否定限制和风格；有首帧时保持主体身份与视觉连贯。先用1至2句中文说明优化，然后换行输出 <<<PLAN>>> 和一个JSON对象，之后不再输出文字。JSON字段：duration为服务端指定的总秒数，ratio为16:9、9:16、1:1、4:3、3:4、21:9之一，resolution为768P或2K，shots为1至6个镜头的数组。每个镜头含duration（正整数秒）、scene（具体画面，不超过200字）、camera（运镜和衔接，不超过80字）。镜头时长之和必须等于总时长。用不同镜头推进事件，不重复同一句描述。全部scene和camera连同时间标记拼接后不得超过2000字。默认10秒；用户要求超过15秒时明确单次最多生成15秒，并压缩事件、保留关键内容优化成15秒。少于4秒时优化成4秒。不擅自拆成多个收费任务，不承诺逐帧精确剪辑点。用户续聊时修改当前草案；如果只是问问题可简短回答，不输出计划。";
+pub const SYSTEM: &str = "你是「剑来」的视频分镜创作助手。根据本次明确需求与对话上下文，整理一条完整视频的连续分镜，不生成视频、不调用工具、不声称已扣费。保留用户主体、文字、否定限制和风格；有首帧时保持主体身份与视觉连贯。先用1至2句中文说明优化，然后换行输出 <<<PLAN>>> 和一个JSON对象，之后不再输出文字。JSON字段：duration为服务端指定的总秒数，ratio为16:9、9:16、1:1、4:3、3:4、21:9之一，resolution固定为768P，style为auto、monochrome-anime、pixar、realistic、clay、chinese-aesthetic、shanghai-animation、cel、custom之一；stylePrompt为自定义画风（最多120字）。对话指定其他画风时style=custom并填写stylePrompt，不自行选择画风。shots为1至6个镜头的数组。每个镜头含duration（正整数秒）、scene（具体画面，不超过200字）、camera（运镜和衔接，不超过80字）。镜头时长之和必须等于总时长。用不同镜头推进事件，不重复同一句描述。全部scene和camera连同时间标记拼接后不得超过2000字。默认15秒；用户要求超过15秒时明确单次最多生成15秒，并压缩事件、保留关键内容优化成15秒。少于4秒时优化成4秒。不擅自拆成多个收费任务，不承诺逐帧精确剪辑点。用户续聊时修改当前草案；如果只是问问题可简短回答，不输出计划。";
 pub const RATIOS: [&str; 6] = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"];
 
 #[derive(Clone, Debug)]
@@ -13,6 +13,9 @@ pub struct Policy {
     pub notice: Option<&'static str>,
     ratio: String,
     resolution: String,
+    style: String,
+    style_prompt: String,
+    explicit_style_change: bool,
 }
 
 fn chinese_number(text: &str) -> Option<f64> {
@@ -162,7 +165,7 @@ pub fn policy(input: &Value) -> Result<Policy> {
         input["video"]["duration"]
             .as_u64()
             .filter(|d| (4..=15).contains(d))
-            .unwrap_or(10) as f64
+            .unwrap_or(15) as f64
     });
     let notice = if duration > 15.0 {
         Some("最多一次性生成 15 秒的画面，已将内容压缩优化为 15 秒分镜，请确认后再生成。")
@@ -176,10 +179,25 @@ pub fn policy(input: &Value) -> Result<Policy> {
     if !ratio.is_empty() && !RATIOS.contains(&ratio) {
         return Err(Error(400, "视频画幅无效".into()));
     }
-    if !resolution.is_empty() && !["768P", "2K"].contains(&resolution) {
+    if !resolution.is_empty() && resolution != "768P" {
         return Err(Error(400, "视频清晰度无效".into()));
     }
+    let (given_style, given_detail) = super::video_style::input_style(&input["video"])?;
+    let style = super::video_style::detect(latest)
+        .unwrap_or(given_style)
+        .to_owned();
+    let style_prompt = if style == "custom" {
+        given_detail.to_owned()
+    } else {
+        String::new()
+    };
     Ok(Policy {
+        style,
+        explicit_style_change: super::video_style::detect(latest).is_none()
+            && ["风格", "画风", "水彩", "油画"]
+                .iter()
+                .any(|word| latest.contains(word)),
+        style_prompt,
         duration: duration.round().clamp(4.0, 15.0) as u32,
         notice,
         ratio: if ratio.is_empty() { "16:9" } else { ratio }.into(),
@@ -194,14 +212,7 @@ pub fn policy(input: &Value) -> Result<Policy> {
 
 impl Policy {
     pub fn context(&self) -> String {
-        format!(
-            "本次总时长固定为{}秒，默认画幅{}，默认清晰度{}。所有镜头duration之和必须为{}。{}",
-            self.duration,
-            self.ratio,
-            self.resolution,
-            self.duration,
-            self.notice.unwrap_or("")
-        )
+        format!("本次总时长固定为{}秒，默认画幅{}，默认清晰度{}。所有镜头duration之和必须为{}。{}本轮画风style={}，自定义说明={}。明确对话风格优先，未指定保持auto；按主体、动作、镜头、光线、材质组织分镜，真人避免油画质感，动画保留对应材质。", self.duration, self.ratio, self.resolution, self.duration, self.notice.unwrap_or(""), self.style, self.style_prompt)
     }
 }
 
@@ -224,7 +235,7 @@ pub fn parse(raw: &str, policy: &Policy) -> Option<Value> {
         .filter(|n| (1..=3600).contains(n))?;
     let ratio = value["ratio"].as_str().unwrap_or(&policy.ratio);
     let resolution = value["resolution"].as_str().unwrap_or(&policy.resolution);
-    if !RATIOS.contains(&ratio) || !["768P", "2K"].contains(&resolution) {
+    if !RATIOS.contains(&ratio) || resolution != "768P" {
         return None;
     }
     let mut weights = Vec::with_capacity(shots.len());
@@ -277,6 +288,21 @@ pub fn parse(raw: &str, policy: &Policy) -> Option<Value> {
     let result: Vec<_> = content.into_iter().zip(timings).map(|((scene, camera), duration)| json!({"duration":duration,"scene":scene,"camera":camera})).collect();
     let mut result =
         json!({"duration":policy.duration,"ratio":ratio,"resolution":resolution,"shots":result});
+    let model_style = strv(&value, "style");
+    let model_detail = strv(&value, "stylePrompt").trim();
+    let use_model_style = (policy.style == "auto" || policy.explicit_style_change)
+        && model_style != "auto"
+        && super::video_style::validate(model_style, model_detail).is_ok();
+    result["style"] = json!(if use_model_style {
+        model_style
+    } else {
+        &policy.style
+    });
+    result["stylePrompt"] = json!(if use_model_style {
+        model_detail
+    } else {
+        &policy.style_prompt
+    });
     if let Some(notice) = policy.notice {
         result["notice"] = json!(notice);
     }
@@ -293,8 +319,8 @@ mod tests {
         json!({"duration":duration,"ratio":"16:9","resolution":"768P","shots":[{"duration":2,"scene":"雨滴从屋檐落下","camera":"低机位推进"},{"duration":3,"scene":"街灯倒映在水面","camera":"缓慢抬起"}]})
     }
     #[test]
-    fn defaults_to_ten_and_clamps_over_limit_with_server_notice() {
-        assert_eq!(policy(&input("雨后的城市短片")).unwrap().duration, 10);
+    fn defaults_to_fifteen_and_clamps_over_limit_with_server_notice() {
+        assert_eq!(policy(&input("雨后的城市短片")).unwrap().duration, 15);
         for text in [
             "拍一个20秒视频",
             "二十秒的雨夜",
@@ -325,7 +351,7 @@ mod tests {
             .notice
             .unwrap()
             .contains("4 秒"));
-        assert_eq!(policy(&input("2K 16:9 夜景")).unwrap().duration, 10);
+        assert_eq!(policy(&input("768P 16:9 夜景")).unwrap().duration, 15);
         for (text, duration) in [
             ("不要20秒，改为10秒", 10),
             ("从20秒缩短到8秒", 8),
@@ -345,8 +371,22 @@ mod tests {
         assert_eq!(policy(&i).unwrap().duration, 10);
         i["messages"][0]["content"] = json!("换成暖色调");
         i["video"]["duration"] = json!(99);
-        assert_eq!(policy(&i).unwrap().duration, 10);
+        assert_eq!(policy(&i).unwrap().duration, 15);
     }
+    #[test]
+    fn visual_direction_and_gateway_resolution_are_authoritative() {
+        let mut request = input("改成黏土动画风格");
+        request["video"] = json!({"style":"realistic","duration":15});
+        let policy = policy(&request).unwrap();
+        let mut value = plan(15);
+        value["style"] = json!("realistic");
+        assert_eq!(parse(&value.to_string(), &policy).unwrap()["style"], "clay");
+        value["resolution"] = json!("2K");
+        assert!(parse(&value.to_string(), &policy).is_none());
+        request["video"]["resolution"] = json!("2K");
+        assert!(super::policy(&request).is_err());
+    }
+
     #[test]
     fn validates_and_normalizes_timing_without_fabricating_scenes() {
         let p = policy(&input("20秒短片")).unwrap();

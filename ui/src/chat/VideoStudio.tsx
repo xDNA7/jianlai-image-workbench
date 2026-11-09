@@ -8,7 +8,7 @@ import { chatUsage, type VideoJob } from './api'
 import type { VideoPayload } from './video-pending'
 import type { Upload } from './useWorkbench'
 import { streamVideoChat, type VideoMessage } from './video-chat'
-import { compileStoryboard, duplicateStoryboardShot, moveStoryboardShot, normalizeStoryboard, removeStoryboardShot, resizeStoryboard, type VideoStoryboard } from './video-storyboard'
+import { compileStoryboard, duplicateStoryboardShot, moveStoryboardShot, normalizeStoryboard, removeStoryboardShot, resizeStoryboard, videoStyles, type VideoStoryboard } from './video-storyboard'
 import './video-conversation.css'
 
 type Turn = { id: string; user: string; text: string; status: 'streaming' | 'ready' | 'error' | 'stopped'; storyboard?: VideoStoryboard; error?: string; confirmed?: boolean }
@@ -62,7 +62,6 @@ export function VideoStudio({ accountId, quota, videoJob, videoBusy, videoError,
   const requestVersion = useRef(0)
   const abortRef = useRef<AbortController | null>(null)
   const turnsRef = useRef(turns); turnsRef.current = turns
-  const imageRef = useRef(image); imageRef.current = image
   const alive = useRef(true)
   const client = useQueryClient()
   const usageQuery = useQuery({ queryKey: ['chat', 'usage', accountId], queryFn: chatUsage, enabled: Boolean(accountId), staleTime: 30_000, retry: 1 })
@@ -80,7 +79,7 @@ export function VideoStudio({ accountId, quota, videoJob, videoBusy, videoError,
   }
   const send = async (text: string, upload?: Upload, retry = false) => {
     if (!accountId || abortRef.current || videoBusy || !text.trim() || text.length > 2000) return
-    setLocalError(''); if (upload) { imageRef.current = upload; setImage(upload) }
+    setLocalError(''); if (upload) setImage(upload)
     const prior = retry ? turnsRef.current.slice(0, -1) : turnsRef.current
     const context: VideoMessage[] = prior.slice(-8).flatMap(turn => {
       const content = turn.storyboard ? `${turn.text}\n${JSON.stringify(turn.storyboard)}` : turn.text
@@ -93,12 +92,12 @@ export function VideoStudio({ accountId, quota, videoJob, videoBusy, videoError,
     let proposed: VideoStoryboard | undefined
     const timeout = setTimeout(() => controller.abort(), 180_000)
     try {
-      await streamVideoChat(context, latest ? { duration: latest.duration, ratio: latest.ratio, resolution: latest.resolution } : { duration: 10 }, {
+      await streamVideoChat(context, latest ? { duration: latest.duration, ratio: latest.ratio, resolution: '768P', style: latest.style, stylePrompt: latest.stylePrompt } : { duration: 15 }, {
         onDelta: value => { if (alive.current && version === requestVersion.current) patch(id, turn => ({ ...turn, text: turn.text + value })) },
         onStoryboard: value => { proposed = value },
         onMeta: (used, limit) => { if (alive.current && version === requestVersion.current) client.setQueryData(['chat', 'usage', accountId], { used, limit }) },
       }, controller.signal)
-      if (alive.current && version === requestVersion.current) patch(id, turn => ({ ...turn, status: 'ready', storyboard: proposed ? { ...proposed, resolution: imageRef.current ? proposed.resolution : '768P' } : undefined }))
+      if (alive.current && version === requestVersion.current) patch(id, turn => ({ ...turn, status: 'ready', storyboard: proposed }))
     } catch (reason) {
       if (alive.current && version === requestVersion.current) patch(id, turn => ({ ...turn, status: 'error', error: controller.signal.aborted ? '分镜对话超时，请重试；尚未提交视频任务' : msg(reason), storyboard: undefined }))
     } finally {
@@ -112,9 +111,12 @@ export function VideoStudio({ accountId, quota, videoJob, videoBusy, videoError,
     const prompt = compileStoryboard(plan)
     if (!prompt) { setLocalError('请补全镜头内容，并将分镜描述控制在 2000 字内'); return }
     if (!pendingVideo && quota !== null && quota < plan.duration * 120) { setLocalError(`余额不足：${plan.duration} 秒视频预计 ${cost(plan.duration)}`); return }
-    setLocalError(''); await submitVideo({ prompt, duration: plan.duration, ratio: plan.ratio, resolution: image ? plan.resolution : '768P', image: image?.dataUrl || '' })
+    setLocalError(''); await submitVideo({ prompt, duration: plan.duration, ratio: plan.ratio, resolution: '768P', image: image?.dataUrl || '', style: plan.style, ...(plan.style === 'custom' ? { stylePrompt: plan.stylePrompt } : {}) })
   }
-  useEffect(() => { if (videoJob) setTurns(old => old.map(turn => turn.storyboard && compileStoryboard(turn.storyboard) === videoJob.prompt ? { ...turn, confirmed: videoJob.status !== 'failed' } : turn)) }, [videoJob])
+  useEffect(() => { if (videoJob) setTurns(old => old.map(turn => {
+    const prompt = turn.storyboard && compileStoryboard(turn.storyboard)
+    return prompt && (prompt === videoJob.prompt || videoJob.prompt?.startsWith(`${prompt}\n\n【生成质量规范】\n`)) ? { ...turn, confirmed: videoJob.status !== 'failed' } : turn
+  })) }, [videoJob])
   const download = (job: VideoJob) => { if (!job.url) return; const link = document.createElement('a'); link.href = job.url; link.download = `jianlai-video-${job.id}.mp4`; link.target = '_blank'; link.rel = 'noopener'; link.click() }
   const latestTurn = turns.at(-1)
   const renderPlan = (turn: Turn, index: number) => {
@@ -132,13 +134,13 @@ export function VideoStudio({ accountId, quota, videoJob, videoBusy, videoError,
               { label: '删除', update: () => removeStoryboardShot(plan, shotIndex), unavailable: plan.shots.length === 1 },
             ].map(action => <Button key={action.label} variant="secondary" size="small" aria-label={`镜头${shotIndex + 1}${action.label}`} disabled={Boolean(disabled) || action.unavailable} onClick={() => patch(turn.id, current => ({ ...current, storyboard: action.update() }))}>{action.label}</Button>)}</div></div></div>
           })}</div>
-          <p className="jl-video-edit-hint">复制或删除镜头会重新分配时长，总时长保持不变。首帧用于整条视频，不逐镜头生成。</p><div className="jl-video-options"><label>总时长<select aria-label="视频总时长" value={plan.duration} disabled={disabled} onChange={event => patch(turn.id, current => ({ ...current, storyboard: resizeStoryboard(plan, Number(event.target.value)) }))}>{Array.from({ length: 12 }, (_, i) => i + 4).filter(duration => duration >= plan.shots.length).map(duration => <option key={duration} value={duration} disabled={duration < turn.storyboard!.shots.length}>{duration} 秒</option>)}</select></label><label>画幅<select aria-label="视频画幅" value={plan.ratio} disabled={disabled || Boolean(image)} onChange={event => patch(turn.id, current => ({ ...current, storyboard: { ...plan, ratio: event.target.value as VideoStoryboard['ratio'] } }))}>{['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'].map(ratio => <option key={ratio}>{ratio}</option>)}</select></label><label>清晰度<select aria-label="视频清晰度" value={plan.resolution} disabled={disabled} onChange={event => patch(turn.id, current => ({ ...current, storyboard: { ...plan, resolution: event.target.value as VideoStoryboard['resolution'] } }))}><option>768P</option>{image ? <option>2K</option> : null}</select></label></div>
+          <p className="jl-video-edit-hint">复制或删除镜头会重新分配时长，总时长保持不变。首帧用于整条视频，不逐镜头生成。</p><div className="jl-video-options"><label>总时长<select aria-label="视频总时长" value={plan.duration} disabled={disabled} onChange={event => patch(turn.id, current => ({ ...current, storyboard: resizeStoryboard(plan, Number(event.target.value)) }))}>{Array.from({ length: 12 }, (_, i) => i + 4).filter(duration => duration >= plan.shots.length).map(duration => <option key={duration} value={duration} disabled={duration < turn.storyboard!.shots.length}>{duration} 秒</option>)}</select></label><label>画幅<select aria-label="视频画幅" value={plan.ratio} disabled={disabled || Boolean(image)} onChange={event => patch(turn.id, current => ({ ...current, storyboard: { ...plan, ratio: event.target.value as VideoStoryboard['ratio'] } }))}>{['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'].map(ratio => <option key={ratio}>{ratio}</option>)}</select></label><span className="self-center text-sm text-muted-foreground">清晰度 768P</span><label>画风<select aria-label="视频画风" value={plan.style} disabled={disabled} onChange={event => patch(turn.id, current => ({ ...current, storyboard: { ...plan, style: event.target.value as VideoStoryboard['style'], stylePrompt: undefined } }))}>{videoStyles.map(style => <option key={style.value} value={style.value}>{style.label}</option>)}</select></label>{plan.style === 'custom' ? <label className="min-w-0 flex-1">自定义画风<textarea className="rounded-lg border border-border bg-background px-2 py-2 text-base text-foreground" aria-label="自定义视频画风" rows={2} maxLength={120} value={plan.stylePrompt || ''} disabled={disabled} placeholder="描述画面材质、色彩和摄影方式，最多 120 字" onChange={event => patch(turn.id, current => ({ ...current, storyboard: { ...plan, stylePrompt: event.target.value } }))} /></label> : null}</div>
           <div className="jl-video-confirm"><span className="text-sm text-muted-foreground">预计 {cost(plan.duration)} · ¥1.20 / 秒</span><Button disabled={Boolean(disabled) || !compileStoryboard(plan)} onClick={() => void confirm(turn)}>{turn.confirmed ? '已提交视频' : index !== turns.length - 1 ? '已有更新分镜' : videoBusy ? '生成中' : '确认分镜并生成视频'}</Button></div></div> : null
   }
   return <section className={`jl-video-conversation${latestTurn?.storyboard ? ' jl-video-workspace' : ''}`} aria-label="视频对话">
     {latestTurn?.storyboard ? <div className="jl-video-editor">{renderPlan(latestTurn, turns.length - 1)}</div> : null}
     <div className="jl-video-dialogue">
-    {!turns.length && !videoJob ? <div className="jl-video-welcome"><span className="text-sm text-muted-foreground">AI 创作工作台</span><h1>创建视频</h1><p>描述想法，一起把它整理成镜头。</p><p className="text-sm">未指定时长时按 10 秒分镜，单次最多生成 15 秒。</p></div> : null}
+    {!turns.length && !videoJob ? <div className="jl-video-welcome"><span className="text-sm text-muted-foreground">AI 创作工作台</span><h1>创建视频</h1><p>描述想法，一起把它整理成镜头。</p><p className="text-sm">未指定时长时按 15 秒分镜，单次最多生成 15 秒。</p></div> : null}
     <div className="jl-video-messages" aria-live="polite">{turns.map((turn, index) => {
       const plan = turn.storyboard, latest = index === turns.length - 1
       return <div key={turn.id} className="grid gap-5"><div className="jl-video-user">{turn.user}</div><div className="jl-video-assistant"><div className="jl-video-identity"><img src={avatar} alt="" /><strong>剑来</strong><span>创作助手</span></div>
@@ -154,9 +156,9 @@ export function VideoStudio({ accountId, quota, videoJob, videoBusy, videoError,
       {pendingVideo ? <Button variant="secondary" onClick={() => void checkPendingVideo()} disabled={videoBusy}>核对上次提交</Button> : null}
       {localError ? <p role="alert" className="text-sm text-destructive">{localError}</p> : null}
     </div>
-    <div className="jl-video-footer">{image ? <div className="jl-video-upload"><img src={image.dataUrl} alt="视频首帧" /><div className="min-w-0 flex-1"><p className="truncate">{image.name}</p><p>视频将从此首帧延展；刷新后需重新上传。</p></div><Button variant="ghost" size="small" iconOnly leadingIcon={XIcon} aria-label="移除视频首帧" disabled={replying || videoBusy || pendingVideo} onClick={() => { setImage(null); setTurns(old => old.map(turn => turn.storyboard ? { ...turn, storyboard: { ...turn.storyboard, resolution: '768P' } } : turn)) }} /></div> : null}
+    <div className="jl-video-footer">{image ? <div className="jl-video-upload"><img src={image.dataUrl} alt="视频首帧" /><div className="min-w-0 flex-1"><p className="truncate">{image.name}</p><p>视频将从此首帧延展；刷新后需重新上传。</p></div><Button variant="ghost" size="small" iconOnly leadingIcon={XIcon} aria-label="移除视频首帧" disabled={replying || videoBusy || pendingVideo} onClick={() => setImage(null)} /></div> : null}
       <div className="jl-composer-shell"><Composer replying={replying} usage={usage} editing={false} disabled={!accountId || videoBusy} label="描述你想要的视频" placeholder="描述你想要的视频，或继续调整分镜…" uploadLabel="上传视频首帧" uploadHint="作为视频首帧；请在消息中描述镜头如何延展。" uploadReader={readFirstFrame} onSend={(text, upload) => void send(text, upload)} onStop={stop} /></div>
-      <p className="mt-2 text-center text-xs text-muted-foreground">确认分镜前不提交视频任务。未指定时长默认 10 秒，单次最多 15 秒。</p>
+      <p className="mt-2 text-center text-xs text-muted-foreground">确认分镜前不提交视频任务。未指定时长默认 15 秒，单次最多 15 秒。</p>
     </div>
     </div>
   </section>

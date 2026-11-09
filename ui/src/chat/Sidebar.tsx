@@ -45,6 +45,7 @@ export function Sidebar({ view, balance, hasThread, onView, onClear }: Props) {
         ))}
       </nav>
       <div className="jl-sidebar-footer mt-auto grid gap-3">
+        <a className="text-xs text-muted-foreground underline underline-offset-4" href="https://github.com/xDNA7/jianlai-image-workbench" target="_blank" rel="noopener noreferrer">源码与许可</a>
         {hasThread ? (
           confirming ? (
             <div className="jl-clear-confirm grid gap-3 rounded-xl border border-border p-3 text-sm leading-5">

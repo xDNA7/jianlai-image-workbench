@@ -23,12 +23,10 @@ pub async fn video(a: App, account: String, input: Value) -> Result<Response> {
     if !["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"].contains(&ratio) {
         return Err(fail("画幅无效"));
     }
-    if !["768P", "2K"].contains(&resolution) {
+    if resolution != "768P" {
         return Err(fail("分辨率无效"));
     }
-    if resolution == "2K" && image_data.is_empty() {
-        return Err(fail("文生视频暂不支持2K分辨率"));
-    }
+    let (style, style_detail) = services::video_style::input_style(&input)?;
     let input_bytes = if image_data.is_empty() {
         None
     } else {
@@ -53,7 +51,14 @@ pub async fn video(a: App, account: String, input: Value) -> Result<Response> {
         .rsplit_once(',')
         .map(|(_, v)| hash(v))
         .unwrap_or_default();
-    let fingerprint = hash(&serde_json::to_string(&json!({"prompt":prompt,"duration":duration,"ratio":ratio,"resolution":resolution,"image":image_hash})).unwrap());
+    let mut identity = json!({"prompt":prompt,"duration":duration,"ratio":ratio,"resolution":resolution,"image":image_hash});
+    // Preserve old request identities when clients do not send visual direction.
+    if style != "auto" || !style_detail.is_empty() {
+        identity["style"] = json!(style);
+        identity["stylePrompt"] = json!(style_detail);
+    }
+    let fingerprint = hash(&serde_json::to_string(&identity).unwrap());
+    let prompt = services::video_style::prepare(&prompt, style, style_detail);
     let mut db = a.db();
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if let Some((job, fp)) = tx

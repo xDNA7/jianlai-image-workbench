@@ -1,6 +1,5 @@
 import { normalizeAnimation } from './animation'
 import type { ApiAnnotation } from './marks'
-import { notifyVideoAccessExpired } from './video-access-events'
 import type { GalleryRecord, JobImage, Plan, PublicFigureSource, Template } from './types'
 import type { components } from '../api/generated'
 import { getPublicFigureNames, isPublicFigureImageUrl, validatePlanFigureSources, validateFigureSources } from './public-figures'
@@ -67,7 +66,6 @@ export async function request<T = unknown>(path: string, init: RequestInit = {})
     })
     if (response.status === 413) throw new ApiError(413, '图片提交体积过大，请压缩图片后重试')
     if (!response.ok) {
-      if (response.status === 401 && (path === 'videos' || path.startsWith('videos/'))) notifyVideoAccessExpired()
       throw new ApiError(response.status, errorMessage(data, '请求失败，请稍后重试'))
     }
     return data as T
