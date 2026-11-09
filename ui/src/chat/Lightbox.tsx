@@ -1,3 +1,4 @@
+import { imageExtension, animationSummary } from './animation'
 import { useState } from 'react'
 import { Heading, Text } from 'react-aria-components'
 import { Modal } from '@/boardui/modal'
@@ -16,6 +17,8 @@ export type LightboxImage = {
   download: string
   prompt: string
   text?: string
+  type?: string
+  animation?: import('./types').AnimationMetadata
 }
 
 type Props = {
@@ -62,7 +65,8 @@ export function Lightbox({ image, favorite, onClose, onFavorite, onSaveTemplate,
           <Text slot="description" className="sr-only">{image?.prompt}</Text>
           {image ? (
             <>
-              <ZoomViewer key={image.id} preview={image.preview} original={image.download} alt={image.prompt} />
+              <ZoomViewer key={image.id} preview={imageExtension(image) === 'gif' ? image.download : image.preview} original={image.download} alt={image.prompt} />
+              {image.animation ? <p className="text-sm text-muted-foreground">GIF · {animationSummary(image.animation)}</p> : null}
               <p className="line-clamp-3 text-sm text-muted-foreground">{image.prompt}</p>
               {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
               {saved ? <p role="status" className="text-sm text-primary">已保存到我的模板</p> : null}
@@ -94,7 +98,7 @@ export function Lightbox({ image, favorite, onClose, onFavorite, onSaveTemplate,
               ) : null}
               <div className="flex flex-wrap items-center gap-2">
                 <Button onClick={() => onContinue(image)} leadingIcon={PencilIcon}>修改这张图</Button>
-                <ButtonLink variant="secondary" leadingIcon={DownloadIcon} href={image.download} download={`jianlai-${image.id}.png`} target="_blank" rel="noreferrer">下载原图</ButtonLink>
+                <ButtonLink variant="secondary" leadingIcon={DownloadIcon} href={image.download} download={`jianlai-${image.id}.${imageExtension(image)}`} target="_blank" rel="noreferrer">下载原图</ButtonLink>
                 <Button variant="secondary" aria-pressed={favorite} onClick={() => onFavorite(image)} leadingIcon={StarIcon} className={favorite ? '[&_svg]:fill-amber-400 [&_svg]:text-amber-400' : ''}>{favorite ? '已收藏' : '收藏'}</Button>
                 <Button
                   variant="secondary"

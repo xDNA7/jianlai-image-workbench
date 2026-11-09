@@ -222,7 +222,12 @@ pub async fn image(a: App, account: String, input: Value) -> Result<Response> {
     if !matches(r"^[a-zA-Z0-9-]{16,80}$", &key) {
         return Err(fail("任务标识无效"));
     }
-    let p = valid_params(input)?;
+    let mut p = valid_params(input)?;
+    if let Some(animation) = super::animation::normalize(&p["animation"], strv(&p, "prompt"))? {
+        p["animation"] = animation;
+        p["count"] = json!(1);
+        p["compare"] = json!(false);
+    }
     let fingerprint = hash(&serde_json::to_string(&p).unwrap());
     let mut db = a.db();
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;

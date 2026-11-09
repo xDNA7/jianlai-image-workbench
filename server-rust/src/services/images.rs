@@ -3,7 +3,7 @@
 use crate::repositories::database::Row;
 use crate::*;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use image::ImageReader;
+use image::{AnimationDecoder, ImageDecoder, ImageReader};
 use std::{
     fs::{File, OpenOptions},
     io::{Cursor, Write},
@@ -140,12 +140,127 @@ pub fn public_job(db: &impl repositories::database::Query, job: &str) -> Result<
     let mut v = money(db)?;
     v["requestKey"] = json!(request_key);
     let quota = money(db)?;
-    v.as_object_mut().unwrap().extend(json!({"id":job,"status":if status=="queued"{"running"}else{&status},"phase":if status=="queued"{"queued"}else{phase.as_deref().unwrap_or(&status)},"charged":charged as f64/100.,"availableCents":quota["availableCents"],"images":images(db,job,false)?.iter().map(|i|json!({"url":i.object_url.clone().unwrap_or_else(||format!("api/jobs/{job}/images/{}",i.idx)),"previewUrl":i.preview_url.clone(),"downloadUrl":i.object_url.clone().unwrap_or_else(||format!("api/jobs/{job}/images/{}",i.idx)),"type":i.mime,"index":i.idx,"created":i.created,"expiresAt":i.created+USER_IMAGE_RETENTION_MS})).collect::<Vec<_>>(),"error":r["error"].as_str().unwrap_or(""),"created":created,"expiresAt":created+USER_IMAGE_RETENTION_MS,"count":p["count"].as_i64().unwrap_or(1)}).as_object().unwrap().clone());
+    v.as_object_mut().unwrap().extend(json!({"id":job,"status":if status=="queued"{"running"}else{&status},"phase":if status=="queued"{"queued"}else{phase.as_deref().unwrap_or(&status)},"charged":charged as f64/100.,"availableCents":quota["availableCents"],"images":images(db,job,false)?.iter().map(|i|json!({"url":i.object_url.clone().unwrap_or_else(||format!("api/jobs/{job}/images/{}",i.idx)),"previewUrl":i.preview_url.clone(),"downloadUrl":i.object_url.clone().unwrap_or_else(||format!("api/jobs/{job}/images/{}",i.idx)),"type":i.mime,"animation":r["images"].as_array().and_then(|images|images.iter().find(|image|image["index"]==i.idx)).and_then(|image|image.get("animation")).cloned().unwrap_or(Value::Null),"index":i.idx,"created":i.created,"expiresAt":i.created+USER_IMAGE_RETENTION_MS})).collect::<Vec<_>>(),"error":r["error"].as_str().unwrap_or(""),"created":created,"expiresAt":created+USER_IMAGE_RETENTION_MS,"count":p["count"].as_i64().unwrap_or(1)}).as_object().unwrap().clone());
     Ok(v)
 }
+/// Validate the complete GIF container before decoding any frame. Bounds are
+/// intentionally independent of prompt recommendations: provider results vary.
+fn gif_container(bytes: &[u8]) -> Result<(u32, u32, usize)> {
+    let invalid = || fail("GIF容器无效或不完整");
+    if bytes.len() < 14
+        || bytes.len() > 32 * 1024 * 1024
+        || !(bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"))
+    {
+        return Err(invalid());
+    }
+    let width = u16::from_le_bytes([bytes[6], bytes[7]]) as u32;
+    let height = u16::from_le_bytes([bytes[8], bytes[9]]) as u32;
+    let pixels = u64::from(width) * u64::from(height);
+    if width == 0 || height == 0 || width > 4096 || height > 4096 || pixels > 4 * 1024 * 1024 {
+        return Err(fail("GIF尺寸超过安全限制"));
+    }
+    let palette_size = |packed: u8| {
+        if packed & 0x80 != 0 {
+            3usize << ((packed & 7) + 1)
+        } else {
+            0
+        }
+    };
+    let mut pos = 13 + palette_size(bytes[10]);
+    let mut frames = 0usize;
+    loop {
+        let marker = *bytes.get(pos).ok_or_else(invalid)?;
+        pos += 1;
+        match marker {
+            0x3b => {
+                if pos != bytes.len() || frames == 0 {
+                    return Err(invalid());
+                }
+                return Ok((width, height, frames));
+            }
+            0x21 => {
+                pos += 1;
+            } // extension label, followed by data sub-blocks
+            0x2c => {
+                let descriptor = bytes.get(pos..pos + 9).ok_or_else(invalid)?;
+                let left = u16::from_le_bytes([descriptor[0], descriptor[1]]) as u32;
+                let top = u16::from_le_bytes([descriptor[2], descriptor[3]]) as u32;
+                let w = u16::from_le_bytes([descriptor[4], descriptor[5]]) as u32;
+                let h = u16::from_le_bytes([descriptor[6], descriptor[7]]) as u32;
+                if w == 0 || h == 0 || left + w > width || top + h > height {
+                    return Err(invalid());
+                }
+                frames += 1;
+                if frames > 120 || pixels * frames as u64 > 32 * 1024 * 1024 {
+                    return Err(fail("GIF帧数或累计解码大小超过安全限制"));
+                }
+                pos += 9 + palette_size(descriptor[8]);
+                let code_size = *bytes.get(pos).ok_or_else(invalid)?;
+                if !(2..=8).contains(&code_size) {
+                    return Err(invalid());
+                }
+                pos += 1;
+            }
+            _ => return Err(invalid()),
+        }
+        loop {
+            let size = *bytes.get(pos).ok_or_else(invalid)? as usize;
+            pos += 1;
+            if size == 0 {
+                break;
+            }
+            pos = pos
+                .checked_add(size)
+                .filter(|p| *p <= bytes.len())
+                .ok_or_else(invalid)?;
+        }
+    }
+}
+
+/// Actual metadata from all decoded frames, never from the requested prompt.
+/// A static response returns null, so callers can report an unmet GIF request.
+pub fn animation_metadata(bytes: &[u8]) -> Result<Value> {
+    if !(bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")) {
+        return Ok(Value::Null);
+    }
+    let (width, height, expected_frames) = gif_container(bytes)?;
+    let mut decoder =
+        image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(|_| fail("GIF解码失败"))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    decoder
+        .set_limits(limits)
+        .map_err(|_| fail("GIF超出解码限制"))?;
+    let mut duration_ms = 0f64;
+    let mut count = 0usize;
+    for frame in decoder.into_frames() {
+        let frame = frame.map_err(|_| fail("GIF帧无效或不完整"))?;
+        let (numerator, denominator) = frame.delay().numer_denom_ms();
+        duration_ms += f64::from(numerator) / f64::from(denominator);
+        count += 1;
+        if count > expected_frames || duration_ms > 60_000. {
+            return Err(fail("GIF帧数或时长超过安全限制"));
+        }
+    }
+    if count != expected_frames {
+        return Err(fail("GIF帧无效或不完整"));
+    }
+    Ok(
+        json!({"frames":count,"durationMs":duration_ms.round() as u64,
+        "fps":if duration_ms > 0. { count as f64 * 1000. / duration_ms } else { 0. },
+        "width":width,"height":height}),
+    )
+}
+
 pub fn image_type(bytes: &[u8]) -> Result<String> {
     if bytes.len() < 20 || bytes.len() > 32 * 1024 * 1024 {
         return Err(fail("图片文件无效或不完整"));
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        animation_metadata(bytes)?;
+        return Ok("image/gif".into());
     }
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         let mut pos = 8usize;
@@ -284,6 +399,92 @@ mod image_type_tests {
         assert!(history["records"].as_array().unwrap().is_empty());
     }
 
+    fn gif(frames: usize, delay_ms: u32) -> Vec<u8> {
+        let mut bytes = vec![];
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+            for n in 0..frames {
+                let pixels = image::RgbaImage::from_pixel(2, 3, image::Rgba([n as u8, 0, 0, 255]));
+                encoder
+                    .encode_frame(image::Frame::from_parts(
+                        pixels,
+                        0,
+                        0,
+                        image::Delay::from_numer_denom_ms(delay_ms, 1),
+                    ))
+                    .unwrap();
+            }
+        }
+        bytes
+    }
+
+    #[test]
+    fn gif_preserves_real_frame_count_and_timing() {
+        let bytes = gif(12, 250);
+        assert_eq!(image_type(&bytes).unwrap(), "image/gif");
+        let metadata = animation_metadata(&bytes).unwrap();
+        assert_eq!(metadata["frames"], 12);
+        assert_eq!(metadata["durationMs"], 3000);
+        assert_eq!(metadata["fps"], 4.);
+        assert_eq!(metadata["width"], 2);
+        assert_eq!(metadata["height"], 3);
+        assert!(animation_metadata(b"not a GIF").unwrap().is_null());
+    }
+
+    #[test]
+    fn gif_rejects_missing_trailer_and_truncated_frames() {
+        let bytes = gif(2, 250);
+        assert!(image_type(&bytes[..bytes.len() - 1]).is_err());
+        let mut truncated = bytes[..bytes.len() / 2].to_vec();
+        truncated.push(0x3b);
+        assert!(image_type(&truncated).is_err());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(image_type(&trailing).is_err());
+    }
+
+    #[test]
+    fn gif_bounds_frame_count_canvas_and_duration_before_delivery() {
+        assert!(image_type(&gif(121, 10)).is_err());
+        assert!(image_type(&gif(2, 31_000)).is_err());
+        let mut oversized = gif(1, 250);
+        oversized[6..8].copy_from_slice(&4097u16.to_le_bytes());
+        assert!(image_type(&oversized).is_err());
+        let mut cumulative = gif(9, 250);
+        cumulative[6..8].copy_from_slice(&4096u16.to_le_bytes());
+        cumulative[8..10].copy_from_slice(&1024u16.to_le_bytes());
+        assert!(image_type(&cumulative).is_err());
+        assert_eq!(animation_metadata(&gif(60, 250)).unwrap()["frames"], 60);
+    }
+
+    #[test]
+    fn public_job_returns_persisted_animation_without_reading_the_object() {
+        let db = retention_fixture();
+        let (job, _) = retained_image(&db, 99, 0, "owner");
+        let metadata = animation_metadata(&gif(12, 250)).unwrap();
+        db.execute(
+            "UPDATE jobs SET result=? WHERE id=?",
+            params![
+                json!({"images":[{"index":0,"animation":metadata}]}).to_string(),
+                job
+            ],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE stored_images SET type='image/gif' WHERE job=?",
+            [&job],
+        )
+        .unwrap();
+        let result = public_job(&db, &job).unwrap();
+        assert_eq!(result["images"][0]["type"], "image/gif");
+        assert_eq!(result["images"][0]["animation"], metadata);
+        let url = url::Url::parse("http://localhost/api/history").unwrap();
+        assert_eq!(
+            history(&db, "owner", &url).unwrap()["records"][0]["type"],
+            "image/gif"
+        );
+    }
+
     #[test]
     fn accepts_jpeg_eoi_with_trailing_padding() {
         let mut jpeg = vec![0xff, 0xd8];
@@ -393,7 +594,12 @@ pub fn save_image(
             let _ = std::fs::remove_file(&local);
             return Err(fail("WebP预览生成失败"));
         }
-        let ext = if mime == "image/jpeg" { "jpg" } else { "png" };
+        let ext = match mime.as_str() {
+            "image/jpeg" => "jpg",
+            "image/webp" => "webp",
+            "image/gif" => "gif",
+            _ => "png",
+        };
         let key = format!("results/originals/{file}.{ext}");
         let preview_key = format!("results/previews/{file}.webp");
         let original_name = format!("{job}-{idx}.{ext}");
@@ -594,7 +800,13 @@ pub fn expire_queued(a: &App) -> Result<()> {
     )?;
     Ok(())
 }
-fn settle(a: &App, job: &str, found: Vec<StoredImage>, error: &str) -> Result<()> {
+fn settle(
+    a: &App,
+    job: &str,
+    found: Vec<StoredImage>,
+    error: &str,
+    animation: &Value,
+) -> Result<()> {
     let mut db = a.db();
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let (status, reserved, created): (String, i64, i64) = tx.query_row(
@@ -656,7 +868,7 @@ fn settle(a: &App, job: &str, found: Vec<StoredImage>, error: &str) -> Result<()
         object.insert("references".into(), json!([]));
         object.insert("mask".into(), json!(""));
     }
-    tx.execute(repositories::statements::images::UPDATE_JOBS_ID,params![if found.is_empty(){"failed"}else{"done"},if found.is_empty(){"failed"}else{"done"},cost,json!({"error":error,"images":found.iter().map(|i|json!({"index":i.idx,"type":i.mime,"url":i.object_url.clone().unwrap_or_else(||format!("api/jobs/{job}/images/{}",i.idx)),"previewUrl":i.preview_url.clone(),"downloadUrl":i.object_url.clone().unwrap_or_else(||format!("api/jobs/{job}/images/{}",i.idx))})).collect::<Vec<_>>()} ).to_string(),p.map(|value|value.to_string()),job])?;
+    tx.execute(repositories::statements::images::UPDATE_JOBS_ID,params![if found.is_empty(){"failed"}else{"done"},if found.is_empty(){"failed"}else{"done"},cost,json!({"error":error,"images":found.iter().map(|i|json!({"index":i.idx,"type":i.mime,"animation":animation[i.idx.to_string()],"url":i.object_url.clone().unwrap_or_else(||format!("api/jobs/{job}/images/{}",i.idx)),"previewUrl":i.preview_url.clone(),"downloadUrl":i.object_url.clone().unwrap_or_else(||format!("api/jobs/{job}/images/{}",i.idx))})).collect::<Vec<_>>()} ).to_string(),p.map(|value|value.to_string()),job])?;
     tx.commit()?;
     if let Some(pool) = a.postgres.clone() {
         let balance = a.db().query_row(
@@ -695,6 +907,7 @@ pub async fn execute(a: &App, job: &str, p: Value) {
     let count = p["count"].as_u64().unwrap_or(1) as usize;
     let mut found = vec![];
     let mut reason = String::new();
+    let mut animation = json!({});
     match upstream::generate_detailed(a, &p).await {
         Ok(generated) => {
             reason = generated.warning;
@@ -706,6 +919,9 @@ pub async fn execute(a: &App, job: &str, p: Value) {
             for (idx, bytes) in bytes.iter().enumerate() {
                 match save_image(a, job, &account, idx, bytes) {
                     Ok(i) => {
+                        if let Ok(metadata) = animation_metadata(bytes) {
+                            animation[idx.to_string()] = metadata;
+                        }
                         // Journal each published object before settlement so
                         // boot recovery can charge exactly what was delivered.
                         match a.db().execute(
@@ -756,9 +972,9 @@ pub async fn execute(a: &App, job: &str, p: Value) {
             }
         )
     } else {
-        String::new()
+        reason
     };
-    if let Err(e) = settle(a, job, found, &error) {
+    if let Err(e) = settle(a, job, found, &error, &animation) {
         tracing::error!(job, code = e.0, "commit_failed"); /* Keep reservation for crash recovery; never silently discard published files. */
     } else if let Some(pool) = a.postgres.clone() {
         let snapshot = a.db().query_row(
@@ -871,7 +1087,7 @@ pub fn reconcile(a: &App, boot: bool) -> Result<()> {
         } else {
             "服务重启，部分图片已恢复，仅按交付图片扣费"
         };
-        settle(a, &job, found, error)?;
+        settle(a, &job, found, error, &Value::Null)?;
     }
     Ok(())
 }
@@ -978,6 +1194,6 @@ pub fn history(db: &Connection, account: &str, url: &url::Url) -> Result<Value> 
         |r| r.get(0),
     )?;
     Ok(
-        json!({"records":visible.iter().map(|(i,p)|{let p:Value=serde_json::from_str(p).unwrap_or(json!({}));json!({"id":format!("{}-{}",i.job,i.idx),"jobId":i.job,"index":i.idx,"image":i.object_url.clone().unwrap_or_else(||format!("api/jobs/{}/images/{}",i.job,i.idx)),"previewUrl":i.preview_url.clone(),"downloadUrl":i.object_url.clone().unwrap_or_else(||format!("api/jobs/{}/images/{}",i.job,i.idx)),"prompt":strv(&p,"prompt"),"text":strv(&p,"text"),"size":strv(&p,"size"),"quality":strv(&p,"quality"),"mode":strv(&p,"mode"),"supportsFaceSwap":p["supportsFaceSwap"]==true,"faceSwapPrompt":strv(&p,"faceSwapPrompt"),"annotations":p.get("annotations").cloned().unwrap_or(json!([])),"created":i.created,"expiresAt":i.created+USER_IMAGE_RETENTION_MS})}).collect::<Vec<_>>(),"nextCursor":next,"total":total,"retentionDays":USER_IMAGE_RETENTION_DAYS}),
+        json!({"records":visible.iter().map(|(i,p)|{let p:Value=serde_json::from_str(p).unwrap_or(json!({}));json!({"id":format!("{}-{}",i.job,i.idx),"jobId":i.job,"index":i.idx,"image":i.object_url.clone().unwrap_or_else(||format!("api/jobs/{}/images/{}",i.job,i.idx)),"previewUrl":i.preview_url.clone(),"downloadUrl":i.object_url.clone().unwrap_or_else(||format!("api/jobs/{}/images/{}",i.job,i.idx)),"type":i.mime,"prompt":strv(&p,"prompt"),"text":strv(&p,"text"),"size":strv(&p,"size"),"quality":strv(&p,"quality"),"mode":strv(&p,"mode"),"supportsFaceSwap":p["supportsFaceSwap"]==true,"faceSwapPrompt":strv(&p,"faceSwapPrompt"),"annotations":p.get("annotations").cloned().unwrap_or(json!([])),"created":i.created,"expiresAt":i.created+USER_IMAGE_RETENTION_MS})}).collect::<Vec<_>>(),"nextCursor":next,"total":total,"retentionDays":USER_IMAGE_RETENTION_DAYS}),
     )
 }

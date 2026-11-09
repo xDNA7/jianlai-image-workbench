@@ -1,3 +1,4 @@
+import { recommendAnimation } from './animation'
 import { getPublicFigureContext, getPublicFigureNames, validatePlanFigureSources } from './public-figures'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -30,7 +31,7 @@ const storage = () => (typeof window === 'undefined' ? noStorage : window.localS
 export type Upload = { id: string; name: string; dataUrl: string }
 
 export function defaultPlan(text: string, useReference: boolean): Plan {
-  return { prompt: text, text: '', size: 'auto', quality: 'medium', count: 1, useReference }
+  return { prompt: text, animation: recommendAnimation(text), text: '', size: 'auto', quality: 'medium', count: 1, useReference }
 }
 
 export function isActiveJob(item: ThreadItem) {

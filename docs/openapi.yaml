@@ -821,6 +821,42 @@ components:
           anyOf:
           - $ref: '#/components/schemas/VideoJob'
           - type: 'null'
+    AnimationPlan:
+      type: object
+      required: [fps, durationSeconds, frames]
+      properties:
+        fps:
+          type: number
+          const: 4
+        durationSeconds:
+          type: integer
+          minimum: 1
+          maximum: 6
+        frames:
+          type: integer
+          minimum: 4
+          maximum: 24
+        notice:
+          type: string
+    AnimationMetadata:
+      type: [object, 'null']
+      required: [frames, durationMs, fps, width, height]
+      properties:
+        frames:
+          type: integer
+          minimum: 1
+        durationMs:
+          type: number
+          minimum: 0
+        fps:
+          type: number
+          minimum: 0
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
     GenerateRequest:
       type: object
       required:
@@ -857,6 +893,8 @@ components:
           - blend
           - edit
         compare: *id006
+        animation:
+          $ref: '#/components/schemas/AnimationPlan'
     Error:
       type: object
       required:
@@ -930,6 +968,8 @@ components:
           - 'null'
         downloadUrl: *id002
         type: *id002
+        animation:
+          $ref: '#/components/schemas/AnimationMetadata'
         created: *id005
         expiresAt: *id005
     ImageJob:
@@ -1013,6 +1053,9 @@ components:
           type: integer
           minimum: 0
         image: *id002
+        type: *id002
+        animation:
+          $ref: '#/components/schemas/AnimationMetadata'
         previewUrl: *id008
         downloadUrl: *id002
         prompt: *id002

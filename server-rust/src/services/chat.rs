@@ -4,7 +4,7 @@
 //! `delta` (visible reply text), `plan` (validated generation plan),
 //! `done`, or `error`. The assistant never triggers generation itself;
 //! the browser submits the plan to `/api/generate` after the user confirms.
-use super::video_storyboard;
+use super::{animation, video_storyboard};
 use crate::{store, strv, App, Error, Result};
 use axum::{
     body::{Body, Bytes},
@@ -49,6 +49,7 @@ JSON 字段：\n\
 - size：auto、1024x1024、1536x1024、1024x1536 之一，按用户要求的画幅选择\n\
 - quality：auto、low、medium、high 之一，默认 medium\n\
 - count：1 或 2，用户想对比多个方案时为 2\n\
+- 用户要求 GIF 或动图时，prompt 必须保留动作与循环意图；不要将其改成静态拼图，具体帧率与时长由系统推荐\n\
 - useReference：有参考图且用户要在它的基础上修改时为 true，否则为 false\n\
 - publicFigureVisual：必须是布尔值；只有用户明确要把这位公众人物可辨认的脸/身体画进画面时为true。人名仅作为海报标题、文案、名单、祝贺对象、品牌/店名或引用内容时必须false。默认false。\n\
 - publicFigures：仅当publicFigureVisual为true且用户明确要求画面描绘广为人知的公众人物时，填写独立姓名的字符串数组，最多2人；两个人必须拆成两个元素，不能把“甲、乙”写为一个姓名。否则必须为空数组。\n\
@@ -243,12 +244,14 @@ pub fn parse_plan(raw: &str, has_reference: bool) -> Option<Value> {
         .chars()
         .take(80)
         .collect();
+    let animation = animation::recommend(&prompt);
     Some(json!({
         "prompt": prompt,
         "text": text,
         "size": size,
         "quality": quality,
-        "count": count,
+        "count": if animation.is_some() { 1 } else { count },
+        "animation": animation,
         "useReference": use_reference,
         "publicFigure": public_figure,
         "publicFigures": figures,
@@ -349,6 +352,11 @@ pub fn status(account: &str) -> Value {
 /// when nothing reached the browser (upstream down, timeout, empty).
 pub async fn handle(a: &App, account: &str, input: Value) -> Result<Response> {
     let messages = build_messages(&input)?;
+    let source = messages
+        .last()
+        .map(|m| strv(m, "content"))
+        .unwrap_or("")
+        .to_owned();
     let has_reference = input["reference"].is_object();
     let video = (strv(&input, "mode") == "video")
         .then(|| video_storyboard::policy(&input))
@@ -390,7 +398,14 @@ pub async fn handle(a: &App, account: &str, input: Value) -> Result<Response> {
         let meta = json!({"used": used, "limit": DAILY_LIMIT});
         let _ = tx.send(event("meta", &meta)).await;
         let mut delivered = false;
-        let relayed = relay(request, &tx, has_reference, video.as_ref(), &mut delivered);
+        let relayed = relay(
+            request,
+            &tx,
+            has_reference,
+            video.as_ref(),
+            &source,
+            &mut delivered,
+        );
         let error = match tokio::time::timeout(TIMEOUT, relayed).await {
             Ok(error) => error,
             Err(_) => Some("对话超时，可直接按原文生成".to_owned()),
@@ -425,6 +440,7 @@ async fn relay(
     tx: &mpsc::Sender<Bytes>,
     has_reference: bool,
     video: Option<&video_storyboard::Policy>,
+    source: &str,
     delivered: &mut bool,
 ) -> Option<String> {
     let unavailable = || Some("对话服务暂时不可用，可直接按原文生成".to_owned());
@@ -483,7 +499,10 @@ async fn relay(
         (Some(raw), None) => parse_plan(&raw, has_reference),
         (None, _) => None,
     };
-    if let Some(plan) = plan {
+    if let Some(mut plan) = plan {
+        if video.is_none() {
+            apply_animation_source(&mut plan, source);
+        }
         let kind = if video.is_some() {
             "storyboard"
         } else {
@@ -500,9 +519,34 @@ async fn relay(
     }
     None
 }
+
+/// Prefer the user's actual parameters to rewritten model output. A follow-up
+/// without animation intent can still retain the animation in the model's plan.
+fn apply_animation_source(plan: &mut Value, source: &str) {
+    if animation::explicitly_static(source) {
+        plan["animation"] = Value::Null;
+        let prompt = strv(plan, "prompt");
+        plan["prompt"] = json!(format!("{prompt}\n只要静态图，不要动图。"));
+    } else if let Some(recommendation) = animation::recommend(source) {
+        plan["animation"] = recommendation;
+        plan["count"] = json!(1);
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn animation_uses_user_parameters_even_when_model_omits_them() {
+        let mut plan = parse_plan(r#"{"prompt":"猫咪跳舞","count":2}"#, false).unwrap();
+        apply_animation_source(&mut plan, "生成猫咪GIF，三秒，每秒8帧");
+        assert_eq!(plan["animation"]["durationSeconds"], 3);
+        assert_eq!(plan["animation"]["fps"], 4);
+        assert_eq!(plan["count"], 1);
+        apply_animation_source(&mut plan, "改成静态图，不要GIF");
+        assert!(plan["animation"].is_null());
+        assert!(animation::recommend(strv(&plan, "prompt")).is_none());
+    }
 
     #[test]
     fn splitter_hides_mark_split_across_chunks() {

@@ -107,7 +107,38 @@ pub fn prompt(p: &Value) -> String {
             s.push_str(&note);
         }
     }
+    if p["animation"].is_object() {
+        s.push_str(&format!("\n动图输出要求：生成真正的无缝循环 GIF 动图，{} 帧/秒，总时长 {} 秒，共 {} 帧。每帧延时 250 毫秒，帧间动作连续。不要输出静态图片、拼图或分镜表。优先保持主体和动作一致；画幅参数仅为目标，不要为追求分辨率牺牲动画。",
+            p["animation"]["fps"], p["animation"]["durationSeconds"], p["animation"]["frames"]));
+    }
     s
+}
+fn generation_body(p: &Value, model: &str, count: usize) -> Value {
+    let mut body =
+        json!({"model":model,"prompt":prompt(p),"n":count,"size":p["size"],"quality":p["quality"]});
+    if !p["animation"].is_object() {
+        body["output_format"] = json!("png");
+    }
+    body
+}
+fn animation_warning(p: &Value, bytes: &[u8]) -> String {
+    if !p["animation"].is_object() {
+        return String::new();
+    }
+    match store::animation_metadata(bytes) {
+        Ok(meta) if meta.is_object() && meta["frames"].as_u64().unwrap_or(0) > 1 => {
+            let actual_ms = meta["durationMs"].as_f64().unwrap_or(0.);
+            let target_ms = p["animation"]["durationSeconds"].as_f64().unwrap_or(3.) * 1000.;
+            if meta["frames"] != p["animation"]["frames"] || (actual_ms - target_ms).abs() > 100. {
+                format!("动图已保存，实际 {} 帧、{:.2} 秒（{:.2} 帧/秒），与推荐参数有差异；按已交付图片计费，未自动重试。", meta["frames"], actual_ms/1000., meta["fps"].as_f64().unwrap_or(0.))
+            } else {
+                String::new()
+            }
+        }
+        _ => {
+            "模型返回了静态图片，未生成有效动图；已保留原图，按已交付图片计费，未自动重试。".into()
+        }
+    }
 }
 /// Pixel size of a requested canvas, e.g. "1536x1024" -> (1536, 1024).
 fn canvas(size: &str) -> Option<(u32, u32)> {
@@ -163,9 +194,11 @@ async fn attempt(
                 ("n", count.to_string()),
                 ("size", strv(p, "size").to_owned()),
                 ("quality", strv(p, "quality").to_owned()),
-                ("output_format", "png".into()),
             ] {
                 form = form.text(k, v);
+            }
+            if !p["animation"].is_object() {
+                form = form.text("output_format", "png");
             }
             for (idx, r) in refs.unwrap().iter().enumerate() {
                 let (bytes, mime) = decode_image(r.as_str().unwrap_or(""), 10 * 1024 * 1024)
@@ -196,7 +229,7 @@ async fn attempt(
             }
             request = request.multipart(form);
         } else {
-            request=request.json(&json!({"model":model,"prompt":text,"n":count,"size":p["size"],"quality":p["quality"],"output_format":"png"}));
+            request = request.json(&generation_body(p, model, count));
         }
         let r = request
             .send()
@@ -346,7 +379,12 @@ async fn generate_with_limits(
         if !backup.is_empty() && (backup != credentials[0].0 || backup_base != credentials[0].1) {
             credentials.push((backup, backup_base));
         }
-        let models = models(a.config("IMAGE_MODELS"));
+        let animated = p["animation"].is_object();
+        let models = if animated {
+            vec!["gpt-image-2.6"]
+        } else {
+            models(a.config("IMAGE_MODELS"))
+        };
         let mut last = Error(502, "上游未返回足够的有效图片".into());
         let mut unavailable = vec![false; credentials.len()];
         for model in &models {
@@ -376,6 +414,9 @@ async fn generate_with_limits(
                         Ok(Err(e)) => {
                             last =
                                 Error(e.status, format!("生成服务未完成请求（HTTP {}）", e.status));
+                            if animated {
+                                return Err(last);
+                            }
                             if !e.retry {
                                 return Err(last);
                             }
@@ -386,6 +427,9 @@ async fn generate_with_limits(
                         }
                         Err(_) => {
                             last = Error(504, "上游生成超时".into());
+                            if animated {
+                                return Err(last);
+                            }
                             break;
                         }
                     }
@@ -402,14 +446,52 @@ async fn generate_with_limits(
     if found.is_empty() {
         return Err(failure.unwrap_or_else(|| Error(502, "生成未成功".into())));
     }
+    let warning = if failure.is_none() {
+        found
+            .first()
+            .map(|bytes| animation_warning(p, bytes))
+            .unwrap_or_default()
+    } else {
+        failure.map(|e| e.1).unwrap_or_default()
+    };
     Ok(Generated {
         images: found,
-        warning: failure.map(|e| e.1).unwrap_or_default(),
+        warning,
     })
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn animated_static_delivery_is_not_retried_or_forced_to_png() {
+        let (app, seen, server) = stub(vec![(200, output(&[30]))]).await;
+        let p = json!({"count":1,"prompt":"循环 GIF","size":"1024x1024","quality":"high","animation":{"fps":4,"durationSeconds":3,"frames":12}});
+        let result = generate_detailed(&app, &p).await.unwrap();
+        assert_eq!(result.images.len(), 1);
+        assert!(result.warning.contains("静态图片"));
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0]["model"], "gpt-image-2.6");
+        assert!(seen[0].get("output_format").is_none());
+        assert!(seen[0]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("每帧延时 250 毫秒"));
+        server.abort();
+    }
+    #[tokio::test]
+    async fn animated_ambiguous_failure_does_not_switch_models_or_credentials() {
+        let (app, seen, server) = stub(vec![
+            (502, json!({"error":{"message":"unknown"}})),
+            (200, output(&[30])),
+        ])
+        .await;
+        let p =
+            json!({"count":1,"prompt":"GIF","animation":{"fps":4,"durationSeconds":3,"frames":12}});
+        assert!(generate_detailed(&app, &p).await.is_err());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        server.abort();
+    }
     fn test_png(color: u8) -> Vec<u8> {
         let mut out = std::io::Cursor::new(Vec::new());
         image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(

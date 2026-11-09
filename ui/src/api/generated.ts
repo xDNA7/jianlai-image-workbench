@@ -361,6 +361,20 @@ export interface components {
             /** @description Null unless the current account has a valid independent internal-video session */
             activeVideo?: components["schemas"]["VideoJob"] | null;
         };
+        AnimationPlan: {
+            /** @constant */
+            fps: 4;
+            durationSeconds: number;
+            frames: number;
+            notice?: string;
+        };
+        AnimationMetadata: {
+            frames: number;
+            durationMs: number;
+            fps: number;
+            width: number;
+            height: number;
+        } | null;
         GenerateRequest: {
             prompt: string;
             requestKey: string;
@@ -373,6 +387,7 @@ export interface components {
             /** @enum {string} */
             mode?: "reference" | "blend" | "edit";
             compare?: boolean;
+            animation?: components["schemas"]["AnimationPlan"];
         };
         Error: {
             error: string;
@@ -407,6 +422,7 @@ export interface components {
             previewUrl?: string | null;
             downloadUrl?: string;
             type?: string;
+            animation?: components["schemas"]["AnimationMetadata"];
             created?: number;
             expiresAt?: number;
         };
@@ -454,6 +470,8 @@ export interface components {
             jobId: string;
             index: number;
             image: string;
+            type?: string;
+            animation?: components["schemas"]["AnimationMetadata"];
             previewUrl?: string | null;
             downloadUrl?: string;
             prompt?: string;

@@ -1,6 +1,10 @@
 import type { Mark } from './marks'
 
+export type AnimationPlan = { fps: number; durationSeconds: number; frames: number; notice?: string }
+export type AnimationMetadata = { frames: number; durationMs: number; fps: number; width: number; height: number }
+
 export type Plan = {
+  animation?: AnimationPlan
   prompt: string
   text: string
   size: string
@@ -22,6 +26,8 @@ export type Reference =
   | { kind: 'upload'; id: string; name: string; preview: string }
 
 export type JobImage = {
+  type?: string
+  animation?: AnimationMetadata
   id: string
   jobId: string
   index: number
@@ -88,6 +94,8 @@ export type Capabilities = {
 }
 
 export type GalleryRecord = {
+  type?: string
+  animation?: AnimationMetadata
   id: string
   jobId: string
   index: number

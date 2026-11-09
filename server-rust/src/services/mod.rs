@@ -1,4 +1,5 @@
 //! Business services; provider network calls occur outside repository transactions.
+pub mod animation;
 pub mod chat;
 pub(crate) mod discovery;
 pub(crate) mod domestic_images;

@@ -1,3 +1,4 @@
+import { imageExtension, animationSummary } from './animation'
 import { useState } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
 import { AlertCircleIcon, DownloadIcon, ExpandIcon, PencilIcon } from 'lucide-react'
@@ -84,11 +85,11 @@ export function JobCard({ item, onStop, onRetryPoll, onRetryGeneration, onRebind
                     leadingIcon={DownloadIcon}
                     variant="secondary"
                     title="下载原图" aria-label="下载原图"
-                    href={image.download} download={`jianlai-${image.id}.png`} target="_blank" rel="noreferrer"
+                    href={image.download} download={`jianlai-${image.id}.${imageExtension(image)}`} target="_blank" rel="noreferrer"
                   />
                   </div>
                 </div>
-                <figcaption className="p-2 text-sm text-muted-foreground">如果上下文干扰，请清空对话。</figcaption>
+                <figcaption className="p-2 text-sm text-muted-foreground">{image.animation ? `GIF · ${animationSummary(image.animation)}` : imageExtension(image) === 'gif' ? 'GIF 动图 · 实际参数暂不可用。' : item.plan.animation ? '上游返回静态图片，未生成动图。' : '如果上下文干扰，请清空对话。'}</figcaption>
               </motion.figure>
             ))}
       </div>}
@@ -101,7 +102,7 @@ export function JobCard({ item, onStop, onRetryPoll, onRetryGeneration, onRebind
       {!active ? (
         <div className="text-sm text-muted-foreground">
           已完成 · {item.images.length} 张{item.chargedCents != null ? ` · 实际费用 ${yuan(item.chargedCents)}` : ''}
-          {item.images.length < total || item.error ? <p role="alert" className="mt-2 text-sm text-foreground">部分成功：已交付 {item.images.length}/{total} 张，未完成 {Math.max(0, total - item.images.length)} 张。{item.error || '其余图片未交付，请核对任务结果。'}如需补生成，请另行确认数量与费用。</p> : null}
+          {item.images.length < total || item.error ? <p role="alert" className="mt-2 text-sm text-foreground">{item.images.length === total ? '结果提示：已交付' : '部分成功：已交付'} {item.images.length}/{total} 张，未完成 {Math.max(0, total - item.images.length)} 张。{item.error || '其余图片未交付，请核对任务结果。'}如需补生成，请另行确认数量与费用。</p> : null}
         </div>
       ) : null}
     </div>

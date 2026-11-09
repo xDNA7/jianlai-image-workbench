@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Real PostgreSQL/HTTP ledger tests; local providers only, no production config."""
-import base64, concurrent.futures, hashlib, http.server, json, os, pathlib, re, secrets, shutil, socket, struct, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
+import base64, concurrent.futures, io, hashlib, http.server, json, os, pathlib, re, secrets, shutil, socket, struct, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 BINARY=pathlib.Path(os.environ.get('JIANLAI_TEST_BINARY','/tmp/jianlai-pg-target/debug/image-workbench-server'))
 DB='jianlai_test_business_'+secrets.token_hex(6)
@@ -9,6 +9,7 @@ PASSWORD=secrets.token_hex(16)
 WORK=pathlib.Path(tempfile.mkdtemp(prefix='jianlai-pg-business-',dir='/tmp'))
 PROCESSES=[]
 LOGS=[]
+FAILED=False
 VIDEO_SESSIONS={}
 VIDEO_ACCOUNTS=set()
 VIDEO_BYTES=b"\x00\x00\x00\x20ftypisom"+b"\0"*20
@@ -20,6 +21,13 @@ def free_port():
 def chunk(t,d):return struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
 def png(color=128):return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',8,8,8,2,0,0,0))+chunk(b'IDAT',zlib.compress((b'\0'+bytes([color,64,32])*8)*8))+chunk(b'IEND',b'')
 PNG=png()
+def gif():
+    from PIL import Image
+    out=io.BytesIO()
+    frames=[Image.new('RGB',(8,8),(i*20,40,80)) for i in range(12)]
+    frames[0].save(out,format='GIF',save_all=True,append_images=frames[1:],duration=250,loop=0,optimize=False)
+    return out.getvalue()
+GIF=gif()
 class Provider(http.server.BaseHTTPRequestHandler):
     active=0
     image_requests={}
@@ -41,7 +49,11 @@ class Provider(http.server.BaseHTTPRequestHandler):
                 if status!=200:result={'error':{'message':'content_policy violation' if status==400 else 'rate limited'}}
                 else:
                     colors=[128+i for i in range(value['n'])] if not scenario else [128] if attempt==1 or scenario=='DUPLICATE_BATCH_TEST' else [128+attempt+i for i in range(value['n'])]
-                    result={'data':[{'b64_json':base64.b64encode(png(c)).decode()} for c in colors]}
+                    if 'GIF_TEST' in prompt:
+                        assert value['model']=='gpt-image-2.6',value['model']
+                        assert 'output_format' not in value,value
+                        assert value['n']==1,value['n']
+                    result={'data':[{'b64_json':base64.b64encode(GIF if 'GIF_TEST' in prompt and 'STATIC_GIF_TEST' not in prompt else png(c)).decode()} for c in colors]}
         elif self.path.endswith('/v2/video_generation'):
             self.send_response(200);result={'task_id':'mock-video'}
         elif self.path.endswith('/chat/completions'):
@@ -190,7 +202,7 @@ try:
     subprocess.check_call(['runuser','-u','postgres','--','createdb','-O',ROLE,DB],cwd='/tmp')
     PROVIDER=http.server.ThreadingHTTPServer(('127.0.0.1',0),Provider)
     threading.Thread(target=PROVIDER.serve_forever,daemon=True).start()
-    (WORK/'oss-mock').write_text('#!/usr/bin/env python3\nimport json,pathlib,sys,time\nw=pathlib.Path('+repr(str(WORK))+')\nif (w/"slow-oss").exists():time.sleep(.5)\nwith (w/"oss-commands.jsonl").open("a") as f:f.write(json.dumps(sys.argv[1:])+"\\n")\nif "presign" in sys.argv:print('+repr(f'http://127.0.0.1:{PROVIDER.server_port}/private-video/mock.mp4?signature=mock')+')\n');(WORK/'oss-mock').chmod(0o700)
+    (WORK/'oss-mock').write_text('#!/usr/bin/env python3\nimport hashlib,json,pathlib,sys,time\nw=pathlib.Path('+repr(str(WORK))+')\nif (w/"slow-oss").exists():time.sleep(.5)\nwith (w/"oss-commands.jsonl").open("a") as f:f.write(json.dumps(sys.argv[1:])+"\\n")\nif "cp" in sys.argv:\n i=sys.argv.index("cp");p=pathlib.Path(sys.argv[i+1])\n if p.is_file():\n  with (w/"oss-copies.jsonl").open("a") as f:f.write(json.dumps({"target":sys.argv[i+2],"sha256":hashlib.sha256(p.read_bytes()).hexdigest(),"bytes":p.stat().st_size})+"\\n")\nif "presign" in sys.argv:print('+repr(f'http://127.0.0.1:{PROVIDER.server_port}/private-video/mock.mp4?signature=mock')+')\n');(WORK/'oss-mock').chmod(0o700)
     port,server=start(0);port2=port
     env={**os.environ,'JIANLAI_TEST_DATABASE_URL':f'postgresql://{ROLE}:{PASSWORD}@127.0.0.1/{DB}','CARGO_TARGET_DIR':os.environ.get('CARGO_TARGET_DIR','/tmp/jianlai-pg-target')}
     subprocess.check_call(['cargo','test','--locked','--quiet','--manifest-path',str(ROOT/'server-rust/Cargo.toml'),'postgres_statement_catalog','--','--ignored'],env=env)
@@ -626,13 +638,53 @@ INSERT INTO video_jobs(id,account,request_key,fingerprint,status,phase,created,r
         if active==0:break
         time.sleep(.1)
     with sqlite3.connect(WORK/'data9/state.sqlite') as conn:
-        assert conn.execute('SELECT balance FROM shared_ledger').fetchone()[0]==46610
-        assert conn.execute("SELECT COUNT(*) FROM video_jobs WHERE status='done' AND charged=480").fetchone()[0]==7
+        balance=conn.execute('SELECT balance FROM shared_ledger').fetchone()[0]
+        resumed=conn.execute('SELECT status,charged,error FROM video_jobs ORDER BY id').fetchall()
+        assert balance==46610,{'balance':balance,'videos':resumed}
+        assert conn.execute("SELECT COUNT(*) FROM video_jobs WHERE status='done' AND charged=480").fetchone()[0]==7,resumed
     assert 1<=Provider.peak<=4,Provider.peak
     check('retained SQLite also resumes seven videos through normal four worker slots')
 
+    # Run after the existing exact ledger assertions so new GIF deliveries do
+    # not change their historical accounting baseline.
+    gif_request=payload(prompt='GIF_TEST 循环动图')
+    gif_request['animation']={'fps':4,'durationSeconds':3,'frames':12}
+    before=int(psql('SELECT balance FROM shared_ledger'))
+    code,created,_=req(port,'/api/generate',gif_request,c1);assert code==202,(code,created)
+    duplicate=req(port,'/api/generate',gif_request,c1)
+    assert duplicate[0]==200 and duplicate[1]['id']==created['id'],duplicate
+    done=complete(port,created['id'],c1)
+    assert done['status']=='done' and done['charged']==.3,done
+    assert done['error']=='',done
+    image=done['images'][0]
+    assert image['type']=='image/gif' and image['downloadUrl'].endswith('.gif'),image
+    assert image['animation']=={'frames':12,'durationMs':3000,'fps':4.0,'width':8,'height':8},image
+    assert int(psql('SELECT balance FROM shared_ledger'))==before-30
+    stored=json.loads(psql(f"SELECT json_build_object('mime',mime,'url',object_url) FROM stored_images WHERE job='{created['id']}'"))
+    assert stored['mime']=='image/gif' and stored['url'].endswith('.gif'),stored
+    copies=[json.loads(line) for line in (WORK/'oss-copies.jsonl').read_text().splitlines()]
+    original=next(copy for copy in copies if created['id'] in copy['target'] and copy['target'].endswith('.gif'))
+    assert original['sha256']==hashlib.sha256(GIF).hexdigest() and original['bytes']==len(GIF),original
+    assert req(port,'/api/jobs/'+created['id'],cookie=c2)[0]==404
+    history=req(port,'/api/history',cookie=c1)[1]['records']
+    assert next(row for row in history if row['jobId']==created['id'])['type']=='image/gif'
+    check('GIF HTTP delivery preserves original bytes/MIME/extension and actual metadata; duplicate request charges once and account isolation holds')
+    static_request=payload(prompt='STATIC_GIF_TEST 循环动图')
+    static_request['animation']={'fps':4,'durationSeconds':3,'frames':12}
+    before=int(psql('SELECT balance FROM shared_ledger'))
+    code,created,_=req(port,'/api/generate',static_request,c1);assert code==202,(code,created)
+    done=complete(port,created['id'],c1)
+    assert done['status']=='done' and done['charged']==.3 and '静态图片' in done['error'],done
+    assert done['images'][0]['type']=='image/png' and done['images'][0]['animation'] is None,done
+    assert int(psql('SELECT balance FROM shared_ledger'))==before-30
+    calls=[calls for prompt,calls in Provider.image_requests.items() if 'STATIC_GIF_TEST' in prompt]
+    assert calls==[[1]],calls
+    check('static fallback is delivered and billed once with an explicit warning and no automatic paid retry')
+
     print('PostgreSQL business HTTP integration: ALL PASSED',flush=True)
 except BaseException:
+    FAILED=True
+    print("Failure evidence retained at "+str(WORK),file=sys.stderr)
     for log in LOGS:log.flush()
     for path in WORK.glob('server*.log'):
         print(path.name+':\n'+path.read_text()[-4000:],file=sys.stderr)
@@ -643,4 +695,4 @@ finally:
     for f in LOGS:f.close()
     subprocess.run(['runuser','-u','postgres','--','dropdb','--if-exists',DB],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     psql(f'DROP ROLE IF EXISTS {ROLE}',database='postgres')
-    shutil.rmtree(WORK)
+    if not FAILED:shutil.rmtree(WORK)

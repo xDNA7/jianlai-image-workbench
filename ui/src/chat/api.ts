@@ -1,3 +1,4 @@
+import { normalizeAnimation } from './animation'
 import type { ApiAnnotation } from './marks'
 import { notifyVideoAccessExpired } from './video-access-events'
 import type { GalleryRecord, JobImage, Plan, PublicFigureSource, Template } from './types'
@@ -153,10 +154,11 @@ export function normalizePlan(value: unknown): Plan | null {
   const publicFigureContext = typeof v.publicFigureContext === 'string' ? v.publicFigureContext.trim().slice(0, 80) : undefined
   return {
     prompt,
+    animation: normalizeAnimation(v.animation, prompt),
     text: String(v.text || ''),
     size: String(v.size || 'auto'),
     quality: String(v.quality || 'medium'),
-    count: !useReference && Number(v.count) === 2 ? 2 : 1,
+    count: !normalizeAnimation(v.animation, prompt) && !useReference && Number(v.count) === 2 ? 2 : 1,
     useReference,
     publicFigure,
     publicFigureVisual,
@@ -354,6 +356,8 @@ export function toJobImages(value: unknown, prompt: string, text = ''): JobImage
     id: `${job.id}-${i.index}`,
     jobId: job.id,
     index: i.index,
+    type: i.type,
+    animation: i.animation ?? undefined,
     preview: assetUrl(i.previewUrl || i.url),
     download: assetUrl(i.downloadUrl || i.url),
     prompt,
@@ -400,10 +404,11 @@ export async function submitGenerate({ plan, referenceData, referenceImages, ann
       references,
       annotations: edit ? annotations : [],
       mode: edit ? (referenceData ? 'edit' : names.length ? 'blend' : 'edit') : 'reference',
-      compare: !edit && plan.count === 2,
-      count: edit ? 1 : plan.count,
+      compare: !plan.animation && !edit && plan.count === 2,
+      count: edit || plan.animation ? 1 : plan.count,
       size: plan.size,
       quality: plan.quality,
+      animation: plan.animation,
       requestKey,
     }),
   })
@@ -424,6 +429,8 @@ export async function loadGallery(): Promise<GalleryRecord[]> {
     id: String(r.id),
     jobId: String(r.jobId),
     index: Number(r.index),
+    type: r.type,
+    animation: r.animation ?? undefined,
     preview: assetUrl(r.previewUrl || r.image),
     download: assetUrl(r.downloadUrl || r.image),
     prompt: String(r.prompt || ''),

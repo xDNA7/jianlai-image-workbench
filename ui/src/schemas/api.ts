@@ -3,6 +3,8 @@ import type { components } from '../api/generated'
 
 type Wire = components['schemas']
 
+const animationMetadata = z.object({ frames: z.number().int().positive(), durationMs: z.number().nonnegative(), fps: z.number().nonnegative(), width: z.number().int().positive(), height: z.number().int().positive() })
+
 const option = z.object({ value: z.string(), label: z.string() })
 
 export const capabilitiesSchema = z.object({
@@ -28,6 +30,7 @@ export const jobStateSchema = z.object({
   availableCents: z.number().int().nonnegative().nullable(),
   images: z.array(z.object({
     id: z.string(), jobId: z.string(), index: z.number().int().nonnegative(),
+    type: z.string().optional(), animation: animationMetadata.optional(),
     preview: z.string(), download: z.string(), prompt: z.string(), text: z.string().optional(),
   })),
 })
@@ -41,6 +44,7 @@ export function parseApiError(error: unknown, fallback: string): string {
 // Wire models validate server data before it becomes normalized UI state.
 const rawImageSchema = z.object({
   index: z.number().int().nonnegative(), url: z.string(),
+  type: z.string().optional(), animation: animationMetadata.nullish(),
   previewUrl: z.string().nullish(), downloadUrl: z.string().optional(),
 })
 
@@ -78,6 +82,7 @@ export const bootstrapResponseSchema = z.object({
 export const historyResponseSchema = z.object({
   records: z.array(z.object({
     id: z.string(), jobId: z.string(), index: z.number().int().nonnegative(),
+    type: z.string().optional(), animation: animationMetadata.nullish(),
     image: z.string(), previewUrl: z.string().nullish(), downloadUrl: z.string().optional(),
     prompt: z.string().optional(), text: z.string().optional(), created: z.number(),
   })),

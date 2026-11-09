@@ -5,6 +5,7 @@ import { Button } from '@/boardui/button'
 import { Textarea } from '@/components/ai/textarea'
 import { Input } from '@/components/ai/input'
 import { Pick } from './Pick'
+import { animationForEditedPrompt } from './animation'
 import { searchPublicFigure } from './api'
 import { getPublicFigureNames, getPublicFigureContext, figureSourceKey, validateFigureSources, validatePlanFigureSources } from './public-figures'
 import './plan-card.css'
@@ -78,7 +79,10 @@ export function PlanCard({ item, caps, balance, busy, onChange, onConfirm, onDis
       </div>
     )
   }
-  const set = (patch: Partial<Plan>) => onChange({ ...plan, ...patch, ...(names.length ? { count: 1 } : {}) })
+  const set = (patch: Partial<Plan>) => {
+    const animation = 'animation' in patch ? patch.animation : plan.animation
+    onChange({ ...plan, ...patch, ...((names.length || animation) ? { count: 1 } : {}) })
+  }
   const referenceUpload = reference?.kind === 'upload' ? (
     <div className="jl-plan-reference-upload">
       {missingReference ? <p role="status">刷新后需要重新选择参考图，原方案已保留。</p> : null}
@@ -112,6 +116,7 @@ export function PlanCard({ item, caps, balance, busy, onChange, onConfirm, onDis
         {plan.useReference ? ' · 使用参考图' : ''}
         {plan.text ? ' · 含画面文字' : ''}
       </p></div>
+      {plan.animation ? <p className="text-sm text-muted-foreground" role="status">GIF 动图 · {plan.animation.fps} 帧/秒 · {plan.animation.durationSeconds} 秒 · {plan.animation.frames} 帧。{plan.animation.notice || '推荐参数，实际帧数、时长和画质以生成结果为准。'}</p> : null}
       <p className="jl-plan-summary">{plan.prompt || '请补充画面描述'}</p>
       {reference && !missingReference ? (
         <div className="jl-plan-current-reference" aria-label="本次方案参考图">
@@ -144,7 +149,7 @@ export function PlanCard({ item, caps, balance, busy, onChange, onConfirm, onDis
         <div className="jl-plan-editor">
           <label className="grid gap-1 text-sm text-muted-foreground">
             画面描述
-            <Textarea value={plan.prompt} maxLength={4000} onChange={(e) => set({ prompt: e.target.value })} className="min-h-24 text-foreground" />
+            <Textarea value={plan.prompt} maxLength={4000} onChange={(e) => set({ prompt: e.target.value, animation: animationForEditedPrompt(plan.animation, e.target.value) })} className="min-h-24 text-foreground" />
           </label>
           <label className="grid gap-1 text-sm text-muted-foreground">
             画面文字（可选）
@@ -154,7 +159,7 @@ export function PlanCard({ item, caps, balance, busy, onChange, onConfirm, onDis
           <div className="flex flex-wrap items-center gap-2">
             <Pick label="画幅" value={plan.size} options={caps.sizes} onChange={(size) => set({ size })} />
             <Pick label="质量" value={plan.quality} options={caps.qualities} onChange={(quality) => set({ quality })} />
-            <Pick label="张数" value={String(plan.count)} options={countOptions} disabled={plan.useReference || Boolean(names.length)} onChange={(v) => set({ count: v === '2' ? 2 : 1 })} />
+            <Pick label="张数" value={String(plan.count)} options={countOptions} disabled={plan.useReference || Boolean(names.length) || Boolean(plan.animation)} onChange={(v) => set({ count: v === '2' ? 2 : 1 })} />
           </div>
           {plan.useReference ? <p className="text-sm text-muted-foreground">使用参考图时每次生成 1 张。</p> : null}
         </div>
